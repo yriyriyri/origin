@@ -374,8 +374,8 @@ const LIFE_SIM_PRESET: Preset = {
     tailRibLength: 70,
     headSize: 30,
     headSpeed: 2.2,
-    maxTurn: Math.PI / 90,
-    avoidEdges: 2,
+    maxTurn: Math.PI / 100,
+    avoidEdges: 1,
     centerBias: 0.012,
     color: "#fff",
   },
@@ -405,11 +405,11 @@ export default function Boids() {
   const ENABLE_DENSITY = true;
   const ENABLE_EMBOSS = true;
   
-  const DENSITY_SCALE = 1.5;
+  const DENSITY_SCALE = 1;
   const DENSITY_BLUR_RADIUS = 40.0;
-  const DENSITY_GAIN = 2.0;
-  const SPLAT_RADIUS_SCALE = 1.5;
-  const SPLAT_ALPHA_SCALE = 0.55;
+  const DENSITY_GAIN = 0.7;
+  const SPLAT_RADIUS_SCALE = 1.4;
+  const SPLAT_ALPHA_SCALE = 0.8;
 
   const MONOCHROME = true;
 
