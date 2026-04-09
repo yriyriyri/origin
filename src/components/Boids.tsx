@@ -274,7 +274,7 @@ const LIFE_SIM_PRESET: Preset = {
   species: [
     {
       id: "bone",
-      ratio: 0.7,
+      ratio: 1.0,
       opacity: 1.0,
       maxSpeedScale: 1.25,
       maxForceScale: 1.2,
@@ -325,7 +325,7 @@ const LIFE_SIM_PRESET: Preset = {
     },
     {
       id: "wing",
-      ratio: 0.3,
+      ratio: 0.0,
       opacity: 0.4,
       maxSpeedScale: 1.2,
       maxForceScale: 1.15,
@@ -403,11 +403,15 @@ export default function Boids() {
   const skeletonRef = useRef<Skeleton | null>(null);
 
   const ENABLE_DENSITY = true;
-  const ENABLE_ASCII = true;
+  const ENABLE_ASCII = false;
   
-  const DENSITY_SCALE = 0.5;
-  const DENSITY_BLUR_RADIUS = 2.0;
-  const DENSITY_GAIN = 2.0;
+  const DENSITY_SCALE = 1.0;
+  const DENSITY_BLUR_RADIUS = 1.0;
+  const DENSITY_GAIN = 0.5;
+  const SPLAT_RADIUS_SCALE = 1.35;
+  const SPLAT_ALPHA_SCALE = 0.55;
+
+  const MONOCHROME = true;
 
   const rand = (min: number, max: number) => Math.random() * (max - min) + min;
 
@@ -1470,25 +1474,34 @@ export default function Boids() {
       const maxSpeedEff = base.maxSpeed * (sc.maxSpeedScale ?? 1) * boid.speedScale;
       const minSpeedEff = maxSpeedEff * 0.1;
       const speed = Math.hypot(boid.v.x, boid.v.y);
-  
-      const { r, g, b } = speedToRgb(speed, minSpeedEff, maxSpeedEff);
       const opacity = sc.opacity ?? 1.0;
+  
+      let baseR = 255;
+      let baseG = 255;
+      let baseB = 255;
+  
+      if (!MONOCHROME) {
+        const { r, g, b } = speedToRgb(speed, minSpeedEff, maxSpeedEff);
+        baseR = r;
+        baseG = g;
+        baseB = b;
+      }
   
       const sx = (boid.p.x / w) * canvas.width;
       const sy = (boid.p.y / h) * canvas.height;
   
-      let radius = 24;
-      if (sc.id === "wing") radius = 50;
-      if (sc.id === "head") radius = 27;
-  
-      const inner = radius * 0.18;
+      let radius = 50;
+      
+      radius *= SPLAT_RADIUS_SCALE;
+      
+      const inner = radius * 0.08;
       const outer = radius;
-  
+      
       const grad = ctx.createRadialGradient(sx, sy, inner, sx, sy, outer);
-      grad.addColorStop(0.0, `rgba(${r}, ${g}, ${b}, ${0.22 * opacity})`);
-      grad.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, ${0.12 * opacity})`);
-      grad.addColorStop(0.7, `rgba(${r}, ${g}, ${b}, ${0.045 * opacity})`);
-      grad.addColorStop(1.0, `rgba(${r}, ${g}, ${b}, 0)`);
+      grad.addColorStop(0.0, `rgba(${baseR}, ${baseG}, ${baseB}, ${0.12 * opacity * SPLAT_ALPHA_SCALE})`);
+      grad.addColorStop(0.28, `rgba(${baseR}, ${baseG}, ${baseB}, ${0.085 * opacity * SPLAT_ALPHA_SCALE})`);
+      grad.addColorStop(0.6, `rgba(${baseR}, ${baseG}, ${baseB}, ${0.04 * opacity * SPLAT_ALPHA_SCALE})`);
+      grad.addColorStop(1.0, `rgba(${baseR}, ${baseG}, ${baseB}, 0)`);
   
       ctx.fillStyle = grad;
       ctx.beginPath();
