@@ -48,14 +48,6 @@ void main() {
 
   vec3 col = texture2D(uTexture, cursorPosition).rgb;
 
-  vec3 colorTarget = vec3(0.0, 255.0, 0.0) / 255.0;
-  vec3 diff = col - colorTarget;
-  vec3 squareDiff = diff * diff;
-  vec3 distanceCoefs = vec3((0.5 * diff.r + 2.0), 4.0, (-0.5 * diff.r + 3.0));
-  float colorDistance = 0.28 * sqrt(dot(squareDiff, distanceCoefs));
-
-  col = (colorDistance > 0.35) ? col : vec3(0.0);
-
   float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
   float gray = smoothstep(0.0, 1.0, luma);
 

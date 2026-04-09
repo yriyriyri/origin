@@ -3,19 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  temporalChromaticAberrationFrag,
-  temporalChromaticAberrationVert,
-} from "@/components/shaders/temporalChromaticAberration";
+  densityResolveFrag,
+  densityResolveVert,
+} from "@/components/shaders/densityResolve";
 
 import {
   asciiPostFrag,
   asciiPostVert,
 } from "@/components/shaders/asciiPost";
-
-import {
-  horizontalBlurFrag,
-  horizontalBlurVert,
-} from "@/components/shaders/horizontalBlur";
 
 const copyVert = `
 precision mediump float;
@@ -37,6 +32,50 @@ varying vec2 vUv;
 
 void main() {
   gl_FragColor = texture2D(uTexture, vUv);
+}
+`;
+
+const fieldBlurVert = `
+precision mediump float;
+
+attribute vec2 aPosition;
+varying vec2 vUv;
+
+void main() {
+  vUv = aPosition * 0.5 + 0.5;
+  gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+`;
+
+const fieldBlurFrag = `
+precision mediump float;
+
+uniform sampler2D uTexture;
+uniform vec2 uResolution;
+uniform vec2 uDirection;
+uniform float uBlurRadius;
+
+varying vec2 vUv;
+
+float gaussian(float x, float sigma) {
+  return exp(-(x * x) / (2.0 * sigma * sigma));
+}
+
+void main() {
+  vec2 texel = 1.0 / uResolution;
+  vec2 dir = uDirection * texel;
+
+  vec4 sum = vec4(0.0);
+  float weightSum = 0.0;
+
+  for (int i = -8; i <= 8; i++) {
+    float fi = float(i);
+    float w = gaussian(fi, uBlurRadius);
+    sum += texture2D(uTexture, vUv + dir * fi) * w;
+    weightSum += w;
+  }
+
+  gl_FragColor = sum / max(weightSum, 0.0001);
 }
 `;
 
@@ -267,8 +306,8 @@ const LIFE_SIM_PRESET: Preset = {
     },
     {
       id: "head",
-      ratio: 0.1,
-      opacity: 0.9,
+      ratio: 0.0,
+      opacity: 0.2,
       maxSpeedScale: 1.15,
       maxForceScale: 1.1,
       wAlignScale: 0.9,
@@ -286,16 +325,16 @@ const LIFE_SIM_PRESET: Preset = {
     },
     {
       id: "wing",
-      ratio: 0.2,
-      opacity: 0.9,
-      maxSpeedScale: 1.12,
+      ratio: 0.3,
+      opacity: 0.4,
+      maxSpeedScale: 1.2,
       maxForceScale: 1.15,
       wAlignScale: 1.1,
       wCohScale: 0.35,
       wSepScale: 0.7,
       neighborDistScale: 0.9,
       wing: {
-        attractToRibs: 2.2,
+        attractToRibs: 2.5,
         followRibTangent: 1.8,
         lateralBias: 0.25,
         ribDist: 110,
@@ -363,9 +402,12 @@ export default function Boids() {
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   const skeletonRef = useRef<Skeleton | null>(null);
 
-  const ENABLE_HORIZONTAL_BLUR = true;
+  const ENABLE_DENSITY = true;
   const ENABLE_ASCII = true;
-  const ENABLE_CHROMATIC = false;
+  
+  const DENSITY_SCALE = 0.5;
+  const DENSITY_BLUR_RADIUS = 2.0;
+  const DENSITY_GAIN = 2.0;
 
   const rand = (min: number, max: number) => Math.random() * (max - min) + min;
 
@@ -959,8 +1001,11 @@ export default function Boids() {
       dpr,
     };
   
-    simCanvas.width = Math.floor(rect.width * dpr);
-    simCanvas.height = Math.floor(rect.height * dpr);
+    const densityW = Math.max(1, Math.floor(rect.width * dpr * DENSITY_SCALE));
+    const densityH = Math.max(1, Math.floor(rect.height * dpr * DENSITY_SCALE));
+  
+    simCanvas.width = densityW;
+    simCanvas.height = densityH;
     simCanvas.style.width = `${rect.width}px`;
     simCanvas.style.height = `${rect.height}px`;
   
@@ -1405,54 +1450,53 @@ export default function Boids() {
   const draw = () => {
     const canvas = simCanvasRef.current!;
     const ctx = canvas.getContext("2d")!;
-    const { dpr } = sizeRef.current;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const { w, h } = sizeRef.current;
     const base = presetRef.current;
-    const pixel = base.pixelSize;
-
+  
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, h);
-
-    const sk = skeletonRef.current;
-    if (sk?.cfg.visible) {
-      const C = sk.cfg;
-      ctx.fillStyle = C.color;
-
-      const hs = Math.max(pixel, Math.round(C.headSize / pixel) * pixel);
-      const hx = Math.round(sk.nodes[0].x / pixel) * pixel - Math.floor(hs / 2);
-      const hy = Math.round(sk.nodes[0].y / pixel) * pixel - Math.floor(hs / 2);
-      ctx.fillRect(hx, hy, hs, hs);
-
-      ctx.fillStyle = "#444";
-      for (let j = 0; j < sk.drawAnchors.length; j++) {
-        const a = sk.drawAnchors[j];
-        const rx = Math.round(a.x / pixel) * pixel;
-        const ry = Math.round(a.y / pixel) * pixel;
-        ctx.fillRect(rx, ry, pixel, pixel);
-      }
-    }
-
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+    ctx.globalCompositeOperation = "lighter";
+  
     const boids = boidsRef.current;
     const speciesList = normalizeSpecies(base);
-    
+  
     for (let i = 0; i < boids.length; i++) {
-      const b = boids[i];
-      const sc = speciesList[b.s];
-    
-      const maxSpeedEff = base.maxSpeed * (sc.maxSpeedScale ?? 1) * b.speedScale;
+      const boid = boids[i];
+      const sc = speciesList[boid.s];
+  
+      const maxSpeedEff = base.maxSpeed * (sc.maxSpeedScale ?? 1) * boid.speedScale;
       const minSpeedEff = maxSpeedEff * 0.1;
-      const speed = Math.hypot(b.v.x, b.v.y);
-    
-      const { r, g, b: blue } = speedToRgb(speed, minSpeedEff, maxSpeedEff);
+      const speed = Math.hypot(boid.v.x, boid.v.y);
+  
+      const { r, g, b } = speedToRgb(speed, minSpeedEff, maxSpeedEff);
       const opacity = sc.opacity ?? 1.0;
-    
-      ctx.fillStyle = `rgba(${r}, ${g}, ${blue}, ${opacity})`;
-    
-      const sx = Math.round(b.p.x / pixel) * pixel;
-      const sy = Math.round(b.p.y / pixel) * pixel;
-      ctx.fillRect(sx, sy, pixel, pixel);
+  
+      const sx = (boid.p.x / w) * canvas.width;
+      const sy = (boid.p.y / h) * canvas.height;
+  
+      let radius = 24;
+      if (sc.id === "wing") radius = 50;
+      if (sc.id === "head") radius = 27;
+  
+      const inner = radius * 0.18;
+      const outer = radius;
+  
+      const grad = ctx.createRadialGradient(sx, sy, inner, sx, sy, outer);
+      grad.addColorStop(0.0, `rgba(${r}, ${g}, ${b}, ${0.22 * opacity})`);
+      grad.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, ${0.12 * opacity})`);
+      grad.addColorStop(0.7, `rgba(${r}, ${g}, ${b}, ${0.045 * opacity})`);
+      grad.addColorStop(1.0, `rgba(${r}, ${g}, ${b}, 0)`);
+  
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(sx, sy, outer, 0, Math.PI * 2);
+      ctx.fill();
     }
+  
+    ctx.globalCompositeOperation = "source-over";
   };
 
   useEffect(() => {
@@ -1469,23 +1513,23 @@ export default function Boids() {
     }
 
     const copyProgram = createProgram(gl, copyVert, copyFrag);
-  
-    const chromaticProgram = createProgram(
+
+    const blurProgram = createProgram(
       gl,
-      temporalChromaticAberrationVert,
-      temporalChromaticAberrationFrag
+      fieldBlurVert,
+      fieldBlurFrag
     );
-  
+    
+    const densityResolveProgram = createProgram(
+      gl,
+      densityResolveVert,
+      densityResolveFrag
+    );
+    
     const asciiProgram = createProgram(
       gl,
       asciiPostVert,
       asciiPostFrag
-    );
-
-    const blurProgram = createProgram(
-      gl,
-      horizontalBlurVert,
-      horizontalBlurFrag
     );
   
     const quadBuffer = gl.createBuffer()!;
@@ -1536,17 +1580,16 @@ export default function Boids() {
     const passBFramebuffer = gl.createFramebuffer()!;
   
     const allocPassTargets = () => {
-      const { w, h, dpr } = sizeRef.current;
-      const rw = Math.max(1, Math.floor(w * dpr));
-      const rh = Math.max(1, Math.floor(h * dpr));
+      const densityW = simCanvas.width;
+      const densityH = simCanvas.height;
     
       gl.bindTexture(gl.TEXTURE_2D, passATexture);
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
         gl.RGBA,
-        rw,
-        rh,
+        densityW,
+        densityH,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
@@ -1572,8 +1615,8 @@ export default function Boids() {
         gl.TEXTURE_2D,
         0,
         gl.RGBA,
-        rw,
-        rh,
+        densityW,
+        densityH,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
@@ -1602,30 +1645,33 @@ export default function Boids() {
     const copyUniforms = {
       texture: gl.getUniformLocation(copyProgram, "uTexture"),
     };
-  
-    const chromaticUniforms = {
-      texture: gl.getUniformLocation(chromaticProgram, "uTexture"),
-      resolution: gl.getUniformLocation(chromaticProgram, "uResolution"),
-      time: gl.getUniformLocation(chromaticProgram, "uTime"),
+    
+    const blurUniforms = {
+      texture: gl.getUniformLocation(blurProgram, "uTexture"),
+      resolution: gl.getUniformLocation(blurProgram, "uResolution"),
+      direction: gl.getUniformLocation(blurProgram, "uDirection"),
+      blurRadius: gl.getUniformLocation(blurProgram, "uBlurRadius"),
     };
-  
+    
+    const densityResolveUniforms = {
+      texture: gl.getUniformLocation(densityResolveProgram, "uTexture"),
+      densityGain: gl.getUniformLocation(densityResolveProgram, "uDensityGain"),
+    };
+    
     const asciiUniforms = {
       texture: gl.getUniformLocation(asciiProgram, "uTexture"),
       resolution: gl.getUniformLocation(asciiProgram, "uResolution"),
       mouse: gl.getUniformLocation(asciiProgram, "uMouse"),
       pixelation: gl.getUniformLocation(asciiProgram, "uPixelation"),
     };
-
-    const blurUniforms = {
-      texture: gl.getUniformLocation(blurProgram, "uTexture"),
-      resolution: gl.getUniformLocation(blurProgram, "uResolution"),
-      blurAmount: gl.getUniformLocation(blurProgram, "uBlurAmount"),
-    };
   
-    const renderPost = (timeMs: number) => {
+    const renderPost = () => {
       const { w, h, dpr } = sizeRef.current;
       const rw = Math.max(1, Math.floor(w * dpr));
       const rh = Math.max(1, Math.floor(h * dpr));
+    
+      const densityW = simCanvas.width;
+      const densityH = simCanvas.height;
     
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
       gl.activeTexture(gl.TEXTURE0);
@@ -1639,79 +1685,86 @@ export default function Boids() {
         simCanvas
       );
     
-      let currentTexture = sourceTexture;
-      let writeToA = true;
-    
-      const renderPassToFbo = (
-        program: WebGLProgram,
-        uniforms: () => void,
-        inputTexture: WebGLTexture
-      ) => {
-        const targetFramebuffer = writeToA ? passAFramebuffer : passBFramebuffer;
-        const targetTexture = writeToA ? passATexture : passBTexture;
-    
-        gl.bindFramebuffer(gl.FRAMEBUFFER, targetFramebuffer);
-        gl.viewport(0, 0, rw, rh);
-        gl.useProgram(program);
-        bindFullscreenQuad(program);
+      if (ENABLE_DENSITY) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, passAFramebuffer);
+        gl.viewport(0, 0, densityW, densityH);
+        gl.useProgram(blurProgram);
+        bindFullscreenQuad(blurProgram);
     
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, inputTexture);
-        uniforms();
+        gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
+        gl.uniform1i(blurUniforms.texture, 0);
+        gl.uniform2f(blurUniforms.resolution, densityW, densityH);
+        gl.uniform2f(blurUniforms.direction, 1.0, 0.0);
+        gl.uniform1f(blurUniforms.blurRadius, DENSITY_BLUR_RADIUS);
     
         gl.drawArrays(gl.TRIANGLES, 0, 6);
     
-        currentTexture = targetTexture;
-        writeToA = !writeToA;
-      };
+        gl.bindFramebuffer(gl.FRAMEBUFFER, passBFramebuffer);
+        gl.viewport(0, 0, densityW, densityH);
+        gl.useProgram(blurProgram);
+        bindFullscreenQuad(blurProgram);
     
-      if (ENABLE_HORIZONTAL_BLUR) {
-        renderPassToFbo(
-          blurProgram,
-          () => {
-            gl.uniform1i(blurUniforms.texture, 0);
-            gl.uniform2f(blurUniforms.resolution, w, h);
-            gl.uniform1f(blurUniforms.blurAmount, 6.0);
-          },
-          currentTexture
-        );
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, passATexture);
+        gl.uniform1i(blurUniforms.texture, 0);
+        gl.uniform2f(blurUniforms.resolution, densityW, densityH);
+        gl.uniform2f(blurUniforms.direction, 0.0, 1.0);
+        gl.uniform1f(blurUniforms.blurRadius, DENSITY_BLUR_RADIUS);
+    
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+    
+        gl.bindFramebuffer(gl.FRAMEBUFFER, passAFramebuffer);
+        gl.viewport(0, 0, densityW, densityH);
+        gl.useProgram(densityResolveProgram);
+        bindFullscreenQuad(densityResolveProgram);
+    
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, passBTexture);
+        gl.uniform1i(densityResolveUniforms.texture, 0);
+        gl.uniform1f(densityResolveUniforms.densityGain, DENSITY_GAIN);
+    
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+    
+        if (ENABLE_ASCII) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.viewport(0, 0, rw, rh);
+          gl.useProgram(asciiProgram);
+          bindFullscreenQuad(asciiProgram);
+    
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, passATexture);
+          gl.uniform1i(asciiUniforms.texture, 0);
+          gl.uniform2f(asciiUniforms.resolution, w, h);
+    
+          const mouse = mouseRef.current ?? { x: w * 0.5, y: 0 };
+          gl.uniform2f(asciiUniforms.mouse, mouse.x, mouse.y);
+          gl.uniform1f(asciiUniforms.pixelation, 0.5);
+    
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+          return;
+        }
+    
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, rw, rh);
+        gl.useProgram(copyProgram);
+        bindFullscreenQuad(copyProgram);
+    
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, passATexture);
+        gl.uniform1i(copyUniforms.texture, 0);
+    
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        return;
       }
     
-      if (ENABLE_ASCII) {
-        renderPassToFbo(
-          asciiProgram,
-          () => {
-            gl.uniform1i(asciiUniforms.texture, 0);
-            gl.uniform2f(asciiUniforms.resolution, w, h);
-    
-            const mouse = mouseRef.current ?? { x: w * 0.5, y: 0 };
-            gl.uniform2f(asciiUniforms.mouse, mouse.x, mouse.y);
-            gl.uniform1f(asciiUniforms.pixelation, 0.5);
-          },
-          currentTexture
-        );
-      }
-    
-      if (ENABLE_CHROMATIC) {
-        renderPassToFbo(
-          chromaticProgram,
-          () => {
-            gl.uniform1i(chromaticUniforms.texture, 0);
-            gl.uniform1f(chromaticUniforms.time, timeMs * 0.001);
-            gl.uniform2f(chromaticUniforms.resolution, w, h);
-          },
-          currentTexture
-        );
-      }
-    
-      // Present final texture to screen with plain copy shader
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, rw, rh);
       gl.useProgram(copyProgram);
       bindFullscreenQuad(copyProgram);
     
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, currentTexture);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
       gl.uniform1i(copyUniforms.texture, 0);
     
       gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -1744,7 +1797,7 @@ export default function Boids() {
       if (!runningRef.current) return;
       step();
       draw();
-      renderPost(time);
+      renderPost();
       raf = requestAnimationFrame(loop);
     };
   
@@ -1764,9 +1817,10 @@ export default function Boids() {
       gl.deleteTexture(passBTexture);
       gl.deleteTexture(sourceTexture);
       gl.deleteBuffer(quadBuffer);
+      gl.deleteProgram(copyProgram);
       gl.deleteProgram(blurProgram);
+      gl.deleteProgram(densityResolveProgram);
       gl.deleteProgram(asciiProgram);
-      gl.deleteProgram(chromaticProgram);
     };
   }, []);
 
