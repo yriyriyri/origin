@@ -91,6 +91,38 @@ const getPixelateOpacity = (progress: number) => {
   return 1 - PIXELATE_OPACITY_DROP * ramp;
 };
 
+const getSnapStops = (
+  vh: number,
+  placeholderSection: HTMLElement | null
+): number[] => {
+  const stops: number[] = [];
+
+  stops.push(vh * ((HERO_ABOUT_IN_END + HERO_ABOUT_OUT_START) * 0.5));
+
+  if (!placeholderSection) {
+    return stops;
+  }
+
+  const rect = placeholderSection.getBoundingClientRect();
+  const sectionTop = window.scrollY + rect.top;
+  const stickyTravel = Math.max(1, placeholderSection.offsetHeight - vh);
+
+  const totalSpan =
+    PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN + PLACEHOLDER_HOLD;
+
+  for (let index = 0; index < PLACEHOLDER_PAIRS.length; index++) {
+    const timelineMid =
+      index + PLACEHOLDER_HOLD * 0.5;
+
+    const localProgress =
+      (timelineMid + PLACEHOLDER_FADE_IN) / totalSpan;
+
+    stops.push(sectionTop + localProgress * stickyTravel);
+  }
+
+  return stops;
+};
+
 // const getTitleIntroScale = (progress: number) => {
 //   const active = clamp01(progress);
 //   if (active < 0.25) return 1.16;
@@ -127,6 +159,7 @@ export default function Home() {
   const [placeholderProgress, setPlaceholderProgress] = useState(0);
   const placeholderSectionRef = useRef<HTMLElement | null>(null);
   const [siteInvert, setSiteInvert] = useState(false);
+  const [snapStops, setSnapStops] = useState<number[]>([]);
 
   const handleScroll = useCallback((scroll: number) => {
     const vh = window.innerHeight;
@@ -193,6 +226,21 @@ export default function Home() {
       window.removeEventListener("resize", syncScrollState);
     };
   }, [handleScroll]);
+
+  useEffect(() => {
+    const updateSnapStops = () => {
+      setSnapStops(
+        getSnapStops(window.innerHeight, placeholderSectionRef.current)
+      );
+    };
+  
+    updateSnapStops();
+    window.addEventListener("resize", updateSnapStops);
+  
+    return () => {
+      window.removeEventListener("resize", updateSnapStops);
+    };
+  }, []);
 
   const aboutIn = aboutProgress;
   const aboutOut = 1 - aboutFadeProgress;
@@ -268,7 +316,13 @@ export default function Home() {
         </defs>
       </svg>
 
-      <SmoothScroll onScroll={handleScroll} />
+      <SmoothScroll
+        onScroll={handleScroll}
+        snapStops={snapStops}
+        snapThreshold={90}
+        snapReleaseThreshold={150}
+        snapCooldownMs={520}
+      />
 
       <main
         style={
