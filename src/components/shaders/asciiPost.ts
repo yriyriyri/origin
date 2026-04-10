@@ -84,7 +84,7 @@ void main() {
   col = pow(col, vec3(0.55));
   col = col * character(n, p);
 
-  float mixAmt = 1.0;
+  float mixAmt = 0.7;
   col = mix(vec3(character(n, p)), col, mixAmt);
 
   gl_FragColor = vec4(col, 1.0);

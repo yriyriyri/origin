@@ -953,29 +953,37 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
   const resize = () => {
     const simCanvas = simCanvasRef.current!;
     const glCanvas = glCanvasRef.current!;
-  
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    const rect = glCanvas.getBoundingClientRect();
-  
+    const width = Math.max(1, glCanvas.clientWidth);
+    const height = Math.max(1, glCanvas.clientHeight);
+
     sizeRef.current = {
-      w: Math.floor(rect.width),
-      h: Math.floor(rect.height),
+      w: Math.floor(width),
+      h: Math.floor(height),
       dpr,
     };
-  
-    simCanvas.width = Math.floor(rect.width * dpr);
-    simCanvas.height = Math.floor(rect.height * dpr);
-    simCanvas.style.width = `${rect.width}px`;
-    simCanvas.style.height = `${rect.height}px`;
-  
-    glCanvas.width = Math.floor(rect.width * dpr);
-    glCanvas.height = Math.floor(rect.height * dpr);
+
+    simCanvas.width = Math.floor(width * dpr);
+    simCanvas.height = Math.floor(height * dpr);
+    simCanvas.style.width = `${width}px`;
+    simCanvas.style.height = `${height}px`;
+
+    glCanvas.width = Math.floor(width * dpr);
+    glCanvas.height = Math.floor(height * dpr);
   };
 
   const stepBoids = () => {
     const { w, h } = sizeRef.current;
     const base = presetRef.current;
     const boids = boidsRef.current;
+    const disperseT = clamp(disperseRef.current, 0, 1);
+    const flockHold = lerp(1, 0.12, disperseT);
+    const structureHold = lerp(1, 0.04, disperseT);
+    const homeHold = lerp(1, 0.02, disperseT);
+    const disperseNeighborBoost = lerp(1, 1.7, disperseT);
+    const desiredSeparationBoost = lerp(1, 5.5, disperseT);
+    const sepForceBoost = lerp(1, 3.2, disperseT);
+    const sepWeightBoost = lerp(1, 7.5, disperseT);
 
     const {
       neighborDist,
@@ -1004,7 +1012,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
     const speciesCount = speciesList.length;
     const R0 = R1 * mouseCoreFactor;
     const R2 = R1 * mouseOuterFactor;
-    const { cell } = rebuildGrid(neighborDist);
+    const maxNeighborDist = neighborDist * disperseNeighborBoost;
+    const { cell } = rebuildGrid(maxNeighborDist);
 
     const sumPos: Vec2[] = Array.from({ length: speciesCount }, () => ({ x: 0, y: 0 }));
     const sumVel: Vec2[] = Array.from({ length: speciesCount }, () => ({ x: 0, y: 0 }));
@@ -1042,8 +1051,9 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
       const b = boids[i];
       const sc = speciesList[b.s];
       const nScale = sc.neighborDistScale ?? 1;
-      const neighR = neighborDist * nScale;
+      const neighR = neighborDist * nScale * disperseNeighborBoost;
       const neighR2 = neighR * neighR;
+      const desiredSeparationEff = desiredSeparation * desiredSeparationBoost;
 
       const maxSpeedEff = maxSpeed * (sc.maxSpeedScale ?? 1) * b.speedScale;
       const maxForceEff = maxForce * (sc.maxForceScale ?? 1);
@@ -1081,6 +1091,7 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
       const cy = Math.floor(b.p.y / cell);
 
       let countSame = 0;
+      let countNearby = 0;
       const align: Vec2 = { x: 0, y: 0 };
       const coh: Vec2 = { x: 0, y: 0 };
       const sep: Vec2 = { x: 0, y: 0 };
@@ -1099,10 +1110,12 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
             const dd2 = dx * dx + dy * dy;
 
             if (dd2 < neighR2) {
+              countNearby++;
+
               if (dd2 > 0.0001) {
                 const dd = Math.sqrt(dd2);
                 const inv = 1 / dd;
-                const push = Math.max(0, desiredSeparation - dd) * inv;
+                const push = Math.max(0, desiredSeparationEff - dd) * inv;
                 sep.x -= dx * push;
                 sep.y -= dy * push;
               }
@@ -1121,7 +1134,7 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
 
       if (countSame > 0) {
         const flockScale = inR1 || inR0 ? localFlockDampen : 1.0;
-        const sepScale = inR1 || inR0 ? sepBoostR1 : 1.0;
+        const flockHoldEff = flockScale * flockHold;
 
         align.x /= countSame;
         align.y /= countSame;
@@ -1129,8 +1142,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
         align.x -= b.v.x;
         align.y -= b.v.y;
         V.limit(align, maxForceEff);
-        align.x *= wAlignEff * flockScale;
-        align.y *= wAlignEff * flockScale;
+        align.x *= wAlignEff * flockHoldEff;
+        align.y *= wAlignEff * flockHoldEff;
 
         coh.x /= countSame;
         coh.y /= countSame;
@@ -1139,15 +1152,18 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
         toCenter.x -= b.v.x;
         toCenter.y -= b.v.y;
         V.limit(toCenter, maxForceEff);
-        toCenter.x *= wCohEff * flockScale;
-        toCenter.y *= wCohEff * flockScale;
-
-        V.limit(sep, maxForceEff);
-        sep.x *= wSepEff * sepScale;
-        sep.y *= wSepEff * sepScale;
+        toCenter.x *= wCohEff * flockHoldEff;
+        toCenter.y *= wCohEff * flockHoldEff;
 
         V.add(b.a, align);
         V.add(b.a, toCenter);
+      }
+
+      if (countNearby > 0) {
+        const sepScale = inR1 || inR0 ? sepBoostR1 : 1.0;
+        V.limit(sep, maxForceEff * sepForceBoost);
+        sep.x *= wSepEff * sepScale * sepWeightBoost;
+        sep.y *= wSepEff * sepScale * sepWeightBoost;
         V.add(b.a, sep);
       }
 
@@ -1204,6 +1220,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
           toT.x -= b.v.x;
           toT.y -= b.v.y;
           V.limit(toT, maxForceEff);
+          toT.x *= structureHold;
+          toT.y *= structureHold;
           V.add(b.a, toT);
         }
 
@@ -1253,6 +1271,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
           desire.x -= b.v.x;
           desire.y -= b.v.y;
           V.limit(desire, maxForceEff);
+          desire.x *= structureHold;
+          desire.y *= structureHold;
           V.add(b.a, desire);
         }
 
@@ -1273,6 +1293,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
             desire.x -= b.v.x;
             desire.y -= b.v.y;
             V.limit(desire, maxForceEff);
+            desire.x *= structureHold;
+            desire.y *= structureHold;
             V.add(b.a, desire);
           }
         }
@@ -1340,8 +1362,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
       {
         const com = COM[b.s];
         const velN = VEL[b.s];
-        const gc = sc.globalCohesion ?? 0;
-        const gv = sc.globalVelFollow ?? 0;
+        const gc = (sc.globalCohesion ?? 0) * flockHold;
+        const gv = (sc.globalVelFollow ?? 0) * flockHold;
         const mergeR = sc.globalMergeRadius ?? 0;
 
         if (gc > 0 || gv > 0) {
@@ -1382,8 +1404,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
         toCtr.x -= b.v.x;
         toCtr.y -= b.v.y;
         V.limit(toCtr, maxForceEff * 0.6);
-        toCtr.x *= homeWeight;
-        toCtr.y *= homeWeight;
+        toCtr.x *= homeWeight * homeHold;
+        toCtr.y *= homeWeight * homeHold;
         V.add(b.a, toCtr);
       }
 
@@ -1722,7 +1744,10 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
   
     const onMove = (e: MouseEvent) => {
       const rect = glCanvas.getBoundingClientRect();
-      mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const xNorm = clamp((e.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+      const yNorm = clamp((e.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+      const { w, h } = sizeRef.current;
+      mouseRef.current = { x: xNorm * w, y: yNorm * h };
     };
   
     const onLeave = () => {
@@ -1766,40 +1791,9 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
   
     runningRef.current = true;
     let raf = 0;
-  
-    // Track whether the user is actively clicking (real mouse interaction)
-    let userMouseActive = false;
-
-    const origOnMouseDown = onMouseDown;
-    const wrappedOnMouseDown = (e: MouseEvent) => {
-      userMouseActive = true;
-      origOnMouseDown(e);
-    };
-    const origOnMouseUp = onMouseUp;
-    const wrappedOnMouseUp = (e: MouseEvent) => {
-      userMouseActive = false;
-      origOnMouseUp(e);
-    };
-
-    // Replace the listeners with wrapped versions
-    glCanvas.removeEventListener("mousedown", onMouseDown);
-    glCanvas.removeEventListener("mouseup", onMouseUp);
-    glCanvas.addEventListener("mousedown", wrappedOnMouseDown);
-    glCanvas.addEventListener("mouseup", wrappedOnMouseUp);
 
     const loop = (time: number) => {
       if (!runningRef.current) return;
-
-      // When dispersing and user isn't clicking, override mouse to center + flee
-      const d = disperseRef.current;
-      if (d > 0 && !userMouseActive) {
-        const { w, h } = sizeRef.current;
-        mouseRef.current = { x: w * 0.5, y: h * 0.5 };
-        mouseModeRef.current = "flee";
-      } else if (!userMouseActive && d <= 0 && mouseModeRef.current === "flee") {
-        // Restore off when disperse ends and user isn't clicking
-        mouseModeRef.current = "off";
-      }
 
       step();
       draw();
@@ -1816,8 +1810,8 @@ export default function Boids({ disperse = 0 }: BoidsProps) {
       window.removeEventListener("resize", onResize);
       glCanvas.removeEventListener("mousemove", onMove);
       glCanvas.removeEventListener("mouseleave", onLeave);
-      glCanvas.removeEventListener("mousedown", wrappedOnMouseDown);
-      glCanvas.removeEventListener("mouseup", wrappedOnMouseUp);
+      glCanvas.removeEventListener("mousedown", onMouseDown);
+      glCanvas.removeEventListener("mouseup", onMouseUp);
       glCanvas.removeEventListener("contextmenu", onContextMenu);
   
       gl.deleteFramebuffer(passAFramebuffer);
