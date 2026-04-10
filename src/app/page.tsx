@@ -394,7 +394,6 @@ export default function Home() {
           width: 100%;
         }
 
-        /* ── Boids: fixed fullscreen background ── */
         .boids-bg {
           position: fixed;
           inset: 0;
@@ -415,7 +414,6 @@ export default function Home() {
           will-change: opacity;
         }
 
-        /* ── Fixed overlay: ORIGIN + about text ── */
         .fixed-overlay {
           position: fixed;
           top: 0;
@@ -478,7 +476,7 @@ export default function Home() {
           font-family: var(--font-gt-america);
           font-size: clamp(10px, 1.2vw, 13px);
           line-height: 1.75;
-          color: #ffffff;
+          color: rgba(255, 255, 255, 0.7);
           margin-bottom: 1.6em;
           letter-spacing: 0.01em;
         }
@@ -502,13 +500,11 @@ export default function Home() {
           50% { transform: translateX(-50%) translateY(6px); }
         }
 
-        /* ── Scroll spacer: consumes 2x viewport ── */
         .scroll-spacer {
           height: 200vh;
           pointer-events: none;
         }
 
-        /* ── Placeholder section: transparent — sits on the boids fade-to-black ── */
         .placeholder-section {
           position: relative;
           height: ${(PLACEHOLDER_PAIRS.length + 1) * 100}vh;
@@ -557,7 +553,7 @@ export default function Home() {
           font-family: var(--font-gt-america);
           font-size: clamp(13px, 1.45vw, 17px);
           line-height: 1.75;
-          color: #ffffff;
+          color: rgba(255, 255, 255, 0.7);
           margin-bottom: 1.6em;
           letter-spacing: 0.01em;
         }
