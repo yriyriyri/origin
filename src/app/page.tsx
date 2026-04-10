@@ -320,7 +320,7 @@ export default function Home() {
         onScroll={handleScroll}
         snapStops={snapStops}
         snapThreshold={90}
-        snapReleaseThreshold={150}
+        snapReleaseThreshold={90}
         snapCooldownMs={50}
       />
 
