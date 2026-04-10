@@ -39,13 +39,13 @@ function TransmissionPlane({
   }, [viewport.width, viewport.height]);
 
   const materialProps = useControls({
-    thickness: { value: 0.2, min: 0, max: 3, step: 0.05 },
+    thickness: { value: 1.65, min: 0, max: 3, step: 0.05 },
     roughness: { value: 0, min: 0, max: 1, step: 0.01 },
     transmission: { value: 1, min: 0, max: 1, step: 0.01 },
     ior: { value: 1.2, min: 0, max: 3, step: 0.01 },
-    chromaticAberration: { value: 0.02, min: 0, max: 1, step: 0.001 },
-    backside: { value: true },
-    normalScale: { value: 0.35, min: 0, max: 2, step: 0.01 },
+    chromaticAberration: { value: 0.0, min: 0, max: 1, step: 0.001 },
+    backside: { value: false },
+    normalScale: { value: 3.00, min: 0, max: 5, step: 0.01 },
   });
 
   return (

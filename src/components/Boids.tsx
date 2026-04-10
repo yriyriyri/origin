@@ -334,7 +334,7 @@ export default function Boids({ onFieldRenderer }: BoidsProps) {
   const ENABLE_DENSITY = true;
   const ENABLE_NORMAL_PREVIEW = false;
 
-  const NORMAL_HEIGHT_SCALE = 40.0;
+  const NORMAL_HEIGHT_SCALE = 100.0;
   
   const DENSITY_SCALE = 0.5;
   const DENSITY_BLUR_RADIUS = 10.0;
