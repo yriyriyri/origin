@@ -337,10 +337,10 @@ export default function Boids({ onFieldRenderer }: BoidsProps) {
   const NORMAL_HEIGHT_SCALE = 100.0;
   
   const DENSITY_SCALE = 0.5;
-  const DENSITY_BLUR_RADIUS = 10.0;
-  const DENSITY_GAIN = 1.0;
+  const DENSITY_BLUR_RADIUS = 20.0;
+  const DENSITY_GAIN = 0.7;
   const SPLAT_RADIUS_SCALE = 0.4;
-  const SPLAT_ALPHA_SCALE = 0.2;
+  const SPLAT_ALPHA_SCALE = 0.17;
 
   const MONOCHROME = true;
 
