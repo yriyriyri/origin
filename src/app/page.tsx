@@ -28,7 +28,6 @@ const PIXELATE_LEVELS: readonly PixelateLevel[] = [
 const PIXELATE_OPACITY_DROP = 0.24;
 const PIXELATE_OPACITY_RAMP = 0.14;
 const BOIDS_SCALE = 1.5;
-const ENABLE_SITE_INVERT = false;
 const HERO_ABOUT_IN_END = 0.58;
 const HERO_ABOUT_OUT_START = 1.28;
 const HERO_ABOUT_OUT_DURATION = 0.56;
@@ -127,6 +126,7 @@ export default function Home() {
   const [exitProgress, setExitProgress] = useState(0);
   const [placeholderProgress, setPlaceholderProgress] = useState(0);
   const placeholderSectionRef = useRef<HTMLElement | null>(null);
+  const [siteInvert, setSiteInvert] = useState(false);
 
   const handleScroll = useCallback((scroll: number) => {
     const vh = window.innerHeight;
@@ -155,6 +155,30 @@ export default function Home() {
     const stickyTravel = Math.max(1, placeholderSection.offsetHeight - vh);
     const localProgress = clamp01((scroll - sectionTop) / stickyTravel);
     setPlaceholderProgress(localProgress);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+  
+      const isTypingTarget =
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        target?.isContentEditable;
+  
+      if (isTypingTarget) return;
+  
+      if (e.code === "Space") {
+        e.preventDefault();
+        setSiteInvert((v) => !v);
+      }
+    };
+  
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
 
   useEffect(() => {
@@ -251,7 +275,7 @@ export default function Home() {
       <main
         style={
           {
-            "--site-filter": ENABLE_SITE_INVERT ? "invert(1)" : "none",
+            "--site-filter": siteInvert ? "invert(1)" : "none",
           } as CSSProperties
         }
       >
