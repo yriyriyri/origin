@@ -363,8 +363,8 @@ export default function Boids() {
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   const skeletonRef = useRef<Skeleton | null>(null);
 
-  const ENABLE_HORIZONTAL_BLUR = false;
-  const ENABLE_ASCII = false;
+  const ENABLE_HORIZONTAL_BLUR = true;
+  const ENABLE_ASCII = true;
   const ENABLE_CHROMATIC = false;
 
   const rand = (min: number, max: number) => Math.random() * (max - min) + min;
