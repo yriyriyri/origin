@@ -476,7 +476,7 @@ export default function Home() {
           font-family: var(--font-gt-america);
           font-size: clamp(10px, 1.2vw, 13px);
           line-height: 1.75;
-          color: rgba(255, 255, 255, 0.7);
+          color: rgba(255, 255, 255, 0.9);
           margin-bottom: 1.6em;
           letter-spacing: 0.01em;
         }
@@ -553,7 +553,7 @@ export default function Home() {
           font-family: var(--font-gt-america);
           font-size: clamp(13px, 1.45vw, 17px);
           line-height: 1.75;
-          color: rgba(255, 255, 255, 0.7);
+          color: rgba(255, 255, 255, 0.9);
           margin-bottom: 1.6em;
           letter-spacing: 0.01em;
         }
