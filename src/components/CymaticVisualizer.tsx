@@ -97,6 +97,7 @@ const TARGET_AGENT_LUMA = 0.62;
 const MAX_LUMA_LIFT = 1.0;
 const ENABLE_RADIAL_GLOW = true;
 const GLOW_OVERSCAN = 0.12;
+const ASCII_PIXELATION = 0.82;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -594,7 +595,7 @@ export default function CymaticVisualizer({
           gl.uniform1i(localAsciiUniforms.texture, 0);
           gl.uniform2f(localAsciiUniforms.resolution, renderW, renderH);
           gl.uniform2f(localAsciiUniforms.mouse, renderW * 0.5, renderH * 0.5);
-          gl.uniform1f(localAsciiUniforms.pixelation, 1.0);
+          gl.uniform1f(localAsciiUniforms.pixelation, ASCII_PIXELATION);
         },
         currentTexture
       );
@@ -950,7 +951,7 @@ export default function CymaticVisualizer({
 
       <style jsx>{`
         .root {
-          width: min(100%, 560px);
+          width: min(100%, 660px);
           transition: opacity 180ms linear;
           will-change: opacity;
         }

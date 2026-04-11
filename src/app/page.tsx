@@ -97,6 +97,12 @@ const getSnapStops = (
   placeholderSection: HTMLElement | null
 ): number[] => {
   const stops: number[] = [];
+  const aboutSharpMidpoint =
+    HERO_CONTENT_OFFSET +
+    HERO_ABOUT_IN_END +
+    (HERO_ABOUT_OUT_START - HERO_ABOUT_IN_END) * 0.5;
+
+  stops.push(vh * aboutSharpMidpoint);
 
   if (!placeholderSection) {
     return stops;
@@ -106,12 +112,13 @@ const getSnapStops = (
   const sectionTop = window.scrollY + rect.top;
   const stickyTravel = Math.max(1, placeholderSection.offsetHeight - vh);
 
-  const totalSpan =
-    PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN + PLACEHOLDER_HOLD;
+  const totalSpan = PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN;
 
   for (let index = 0; index < PLACEHOLDER_PAIRS.length; index++) {
     const timelineMid =
-      index + PLACEHOLDER_HOLD * 0.5;
+      index === PLACEHOLDER_PAIRS.length - 1
+        ? index
+        : index + PLACEHOLDER_HOLD * 0.5;
 
     const localProgress =
       (timelineMid + PLACEHOLDER_FADE_IN) / totalSpan;
@@ -125,7 +132,7 @@ const getSnapStops = (
 const PLACEHOLDER_PAIRS = [
   {
     title: "innate",
-    body: "innate is a core intelligence engine. the foundation layer that learns the shape of your organization and compounds with every decision it touches.",
+    body: "innate is the core intelligence engine. the foundation layer that learns the shape of your organization and compounds with every decision it touches.",
   },
   {
     title: "atlas",
@@ -258,7 +265,7 @@ export default function Home() {
   const placeholderTimeline =
     -PLACEHOLDER_FADE_IN +
     placeholderProgress *
-      (PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN + PLACEHOLDER_HOLD);
+      (PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN);
 
   const innatePhase = placeholderTimeline;
   const boidsOverlayOpacity = clamp01(
@@ -319,9 +326,8 @@ export default function Home() {
         onScroll={handleScroll}
         snapStops={snapStops}
         snapThreshold={42}
-        snapReleaseThreshold={18}
-        snapCooldownMs={140}
-        snapVelocityThreshold={0.2}
+        snapReleaseThreshold={8}
+        snapCooldownMs={70}
       />
 
       <main
@@ -472,7 +478,8 @@ export default function Home() {
         }
 
         .fixed-overlay {
-          --about-left-offset: 28px;
+          --about-left-offset: 56px;
+          --section-header-top-offset: 80px;
           position: fixed;
           top: 0;
           left: 0;
@@ -485,26 +492,38 @@ export default function Home() {
         }
 
         .placeholder-overlay {
+          --about-left-offset: 56px;
+          --section-header-top-offset: 80px;
+          --overlay-content-width: calc(100vw - 96px);
+          --text-column-width: min(770px, calc(100vw - 124px));
+          --text-column-right: calc(
+            var(--about-left-offset) + var(--text-column-width)
+          );
+          --visualizer-area-width: calc(
+            var(--overlay-content-width) - var(--text-column-right)
+          );
           position: fixed;
           inset: 0;
           z-index: 3;
-          display: grid;
-          grid-template-columns: minmax(320px, 520px) minmax(340px, 560px);
-          align-items: center;
-          justify-content: center;
-          gap: clamp(28px, 4vw, 56px);
-          padding: 120px 48px 160px;
+          padding: 40px 48px;
           pointer-events: none;
           filter: var(--site-filter);
         }
 
         .placeholder-copy {
-          position: relative;
-          min-height: 320px;
-          width: min(100%, 520px);
+          position: absolute;
+          inset: 0;
         }
 
         .placeholder-visualizer {
+          position: absolute;
+          top: 50%;
+          left: calc(
+            var(--text-column-right) +
+              (var(--overlay-content-width) - var(--text-column-right)) / 2
+          );
+          transform: translate(-50%, -50%);
+          width: min(560px, calc(var(--visualizer-area-width) + 96px), 50vw);
           display: flex;
           justify-content: center;
           align-items: center;
@@ -542,6 +561,7 @@ export default function Home() {
 
         .about-left {
           position: absolute;
+          top: var(--section-header-top-offset);
           left: var(--about-left-offset);
         }
 
@@ -557,33 +577,34 @@ export default function Home() {
         .about-kicker,
         .placeholder-title {
           font-family: var(--font-space-grotesk);
-          font-size: clamp(22px, 2.85vw, 37px);
-          font-weight: 700;
+          font-size: clamp(16px, 2.3vw, 28px);
+          font-weight: 400;
           line-height: 1.1;
           letter-spacing: 0.03em;
           text-transform: lowercase;
           color: #ffffff;
           text-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
-          margin-bottom: 28px;
         }
 
         .about-kicker {
-          font-size: clamp(16px, 2.3vw, 28px);
-          font-weight: 400;
+          margin-bottom: 28px;
+        }
+
+        .placeholder-title {
+          position: absolute;
+          top: var(--section-header-top-offset);
+          left: var(--about-left-offset);
+          margin: 0;
         }
 
         .about-body p,
         .placeholder-body p {
           font-family: var(--font-space-grotesk);
-          font-size: clamp(14px, 1.58vw, 19px);
+          font-size: clamp(16px, 2.3vw, 28px);
           line-height: 1.75;
           color: rgba(255, 255, 255, 0.9);
           margin-bottom: 1.6em;
           letter-spacing: 0.01em;
-        }
-
-        .about-body p {
-          font-size: clamp(16px, 2.3vw, 28px);
         }
 
         .about-body p:last-child {
@@ -612,35 +633,37 @@ export default function Home() {
 
         .placeholder-section {
           position: relative;
-          height: ${(PLACEHOLDER_PAIRS.length + 1) * 100}vh;
+          height: ${(PLACEHOLDER_PAIRS.length + PLACEHOLDER_FADE_IN) * 100}vh;
         }
 
         .placeholder-card {
           position: absolute;
-          inset: 0 auto auto 0;
-          width: 100%;
+          inset: 0;
           will-change: opacity, filter, transform;
         }
 
         @media (max-width: 900px) {
           .placeholder-overlay {
-            grid-template-columns: 1fr;
-            align-content: center;
-            gap: 32px;
-          }
-
-          .placeholder-copy {
-            min-height: 280px;
-            max-width: 100%;
+            padding: 40px 24px 120px;
           }
 
           .placeholder-visualizer {
-            justify-content: center;
+            top: auto;
+            right: auto;
+            bottom: 24px;
+            left: 50%;
+            width: min(420px, calc(100vw - 48px));
+            transform: translateX(-50%);
           }
         }
 
         .placeholder-body {
-          max-width: 520px;
+          position: absolute;
+          top: 50%;
+          left: var(--about-left-offset);
+          width: var(--text-column-width);
+          max-width: var(--text-column-width);
+          transform: translateY(-50%);
         }
 
         .placeholder-body p:last-child {

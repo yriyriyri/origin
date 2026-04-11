@@ -16,9 +16,9 @@ export default function SmoothScroll({
   onScroll,
   snapStops = [],
   snapThreshold = 42,
-  snapReleaseThreshold = 18,
-  snapCooldownMs = 140,
-  snapVelocityThreshold = 0.2,
+  snapReleaseThreshold = 8,
+  snapCooldownMs = 70,
+  snapVelocityThreshold = Number.POSITIVE_INFINITY,
 }: Props) {
   const onScrollRef = useRef(onScroll);
   const snapStopsRef = useRef<number[]>(snapStops);
@@ -59,7 +59,6 @@ export default function SmoothScroll({
     lenis.on("scroll", (e: Lenis) => {
       const now = performance.now();
       const scroll = e.scroll;
-      const velocity = Math.abs(e.velocity);
       const direction = e.direction;
 
       onScrollRef.current?.(scroll);
@@ -84,17 +83,20 @@ export default function SmoothScroll({
         direction === 0 ||
         deltaToStop === 0 ||
         Math.sign(deltaToStop) === direction;
+      const withinVelocityThreshold =
+        !Number.isFinite(snapVelocityThreshold) ||
+        Math.abs(e.velocity) <= snapVelocityThreshold;
 
       if (
         nearest.dist <= snapThreshold &&
         movingTowardStop &&
-        velocity <= snapVelocityThreshold
+        withinVelocityThreshold
       ) {
         lockedStopRef.current = nearest.stop;
         cooldownUntilRef.current = now + snapCooldownMs;
 
         lenis.scrollTo(nearest.stop, {
-          duration: 0.18,
+          duration: 0.14,
           lock: true,
           force: true,
         });
