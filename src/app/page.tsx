@@ -2,7 +2,6 @@
 
 import Boids from "@/components/Boids";
 import CymaticVisualizer from "@/components/CymaticVisualizer";
-import PixelatedTitle from "@/components/PixelatedTitle";
 import SmoothScroll from "@/components/SmoothScroll";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,6 +28,8 @@ const PIXELATE_OPACITY_DROP = 0.24;
 const PIXELATE_OPACITY_RAMP = 0.14;
 const BOIDS_SCALE = 1.5;
 const HERO_ABOUT_IN_END = 0.58;
+const HERO_TITLE_RETURN_END = 0.26;
+const HERO_CONTENT_OFFSET = HERO_TITLE_RETURN_END;
 const HERO_ABOUT_OUT_START = 1.28;
 const HERO_ABOUT_OUT_DURATION = 0.56;
 const HERO_EXIT_START = 1.12;
@@ -97,8 +98,6 @@ const getSnapStops = (
 ): number[] => {
   const stops: number[] = [];
 
-  stops.push(vh * ((HERO_ABOUT_IN_END + HERO_ABOUT_OUT_START) * 0.5));
-
   if (!placeholderSection) {
     return stops;
   }
@@ -123,37 +122,28 @@ const getSnapStops = (
   return stops;
 };
 
-// const getTitleIntroScale = (progress: number) => {
-//   const active = clamp01(progress);
-//   if (active < 0.25) return 1.16;
-//   if (active < 0.5) return 1.1;
-//   if (active < 0.75) return 1.05;
-//   return 1;
-// };
-
-const getTitleIntroScale = () => 1;
-
 const PLACEHOLDER_PAIRS = [
   {
-    title: "Innate",
-    body: "Core intelligence engine\nThe foundation layer that learns the shape of your organization and compounds with every decision it touches.",
+    title: "innate",
+    body: "innate is a core intelligence engine. the foundation layer that learns the shape of your organization and compounds with every decision it touches.",
   },
   {
-    title: "Atlas",
-    body: "Content ontology platform\nMaps the entire landscape of audio content into navigable, queryable intelligence.",
+    title: "atlas",
+    body: "content ontology platform. maps the entire landscape of audio content into navigable, queryable intelligence.",
   },
   {
-    title: "Pulse",
-    body: "Social listening and sentiment\nSurfaces what matters from the noise — real-time cultural pulse for entertainment organizations.",
+    title: "pulse",
+    body: "social listening and sentiment. surfaces what matters from the noise — real-time cultural pulse for entertainment organizations.",
   },
   {
-    title: "Daisy",
-    body: "Artist development AI\nIdentifies, tracks, and models the trajectory of emerging talent before the market catches on.",
+    title: "daisy",
+    body: "artist development ai. identifies, tracks, and models the trajectory of emerging talent before the market catches on.",
   },
 ] as const;
 
 export default function Home() {
   const [aboutProgress, setAboutProgress] = useState(0);
+  const [titleProgress, setTitleProgress] = useState(0);
   const [aboutFadeProgress, setAboutFadeProgress] = useState(0);
   const [exitProgress, setExitProgress] = useState(0);
   const [placeholderProgress, setPlaceholderProgress] = useState(0);
@@ -164,16 +154,26 @@ export default function Home() {
   const handleScroll = useCallback((scroll: number) => {
     const vh = window.innerHeight;
 
-    const about = clamp01(scroll / (vh * HERO_ABOUT_IN_END));
+    const about = clamp01(
+      (scroll - vh * HERO_CONTENT_OFFSET) / (vh * HERO_ABOUT_IN_END)
+    );
     setAboutProgress(about);
 
+    const title = clamp01(
+      (scroll - vh * HERO_TITLE_RETURN_END) /
+        (vh * Math.max(0.001, HERO_ABOUT_IN_END - HERO_TITLE_RETURN_END))
+    );
+    setTitleProgress(title);
+
     const aboutFade = clamp01(
-      (scroll - vh * HERO_ABOUT_OUT_START) / (vh * HERO_ABOUT_OUT_DURATION)
+      (scroll - vh * (HERO_ABOUT_OUT_START + HERO_CONTENT_OFFSET)) /
+        (vh * HERO_ABOUT_OUT_DURATION)
     );
     setAboutFadeProgress(aboutFade);
 
     const exit = clamp01(
-      (scroll - vh * HERO_EXIT_START) / (vh * HERO_EXIT_DURATION)
+      (scroll - vh * (HERO_EXIT_START + HERO_CONTENT_OFFSET)) /
+        (vh * HERO_EXIT_DURATION)
     );
     setExitProgress(exit);
 
@@ -251,9 +251,8 @@ export default function Home() {
     ? 24 * (1 - aboutIn)
     : -14 * aboutFadeProgress;
 
-  const titleIntroScale = getTitleIntroScale();
-  const titlePixelate = exitProgress;
-  const titleOpacity = (1 - exitProgress) * getPixelateOpacity(titlePixelate);
+  const titlePixelate = titleProgress;
+  const titleOpacity = (1 - titleProgress) * getPixelateOpacity(titlePixelate);
 
   const hintOpacity = Math.max(0, 1 - aboutProgress * 3);
   const placeholderTimeline =
@@ -319,9 +318,10 @@ export default function Home() {
       <SmoothScroll
         onScroll={handleScroll}
         snapStops={snapStops}
-        snapThreshold={90}
-        snapReleaseThreshold={90}
-        snapCooldownMs={50}
+        snapThreshold={42}
+        snapReleaseThreshold={18}
+        snapCooldownMs={140}
+        snapVelocityThreshold={0.2}
       />
 
       <main
@@ -342,37 +342,40 @@ export default function Home() {
         </div>
 
         <div className="fixed-overlay">
-          <h1
-            className="title"
+          <div
+            className="hero-intro"
             style={{
               opacity: titleOpacity,
-              transform: `scale(${titleIntroScale})`,
+              filter: getPixelateFilter(titlePixelate),
             }}
           >
-            <PixelatedTitle progress={titlePixelate} text="ORIGIN" />
-          </h1>
+            <span className="hero-intro-word">origin</span>
+            <span className="hero-intro-copy">| intelligence infrastructure</span>
+          </div>
 
           <div
-            className="about-body"
+            className="about-kicker about-left"
             style={{
               filter: getPixelateFilter(aboutPixelate),
               opacity: aboutOpacity,
               transform: `translateY(${aboutTranslateY}px)`,
             }}
           >
+            about
+          </div>
+
+          <div
+            className="about-body"
+            style={{
+              filter: getPixelateFilter(aboutPixelate),
+              opacity: aboutOpacity,
+              transform: `translateY(calc(-50% + ${aboutTranslateY}px))`,
+            }}
+          >
             <p>
-              We build bespoke intelligence systems that embed into music
-              organizations and fundamentally change how decisions get made.
-            </p>
-            <p>
-              Origin Studios is not a tool you add. It&apos;s an upgrade to how
-              you think. We partner with labels, live entertainment companies,
-              and catalog managers to build custom AI infrastructure that
-              becomes indispensable.
-            </p>
-            <p>
-              The invisible engine. The beautiful instrument on top. Technology
-              that compounds with every decision it touches.
+              origin partners with labels, live entertainment companies, and
+              catalog managers to build intelligence systems that form the
+              instincts behind every decision.
             </p>
           </div>
 
@@ -469,6 +472,7 @@ export default function Home() {
         }
 
         .fixed-overlay {
+          --about-left-offset: 28px;
           position: fixed;
           top: 0;
           left: 0;
@@ -506,33 +510,80 @@ export default function Home() {
           align-items: center;
         }
 
-        .title {
-          display: inline-block;
-          font-family: var(--font-gt-america);
-          font-size: clamp(32px, 5vw, 72px);
-          font-weight: 700;
-          line-height: 1;
+        .hero-intro {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          display: inline-flex;
+          align-items: baseline;
+          justify-content: center;
+          gap: clamp(36px, 4.2vw, 72px);
+          width: max-content;
+          max-width: calc(100% - 96px);
+          font-family: var(--font-space-grotesk);
+          font-size: clamp(21px, 2.5vw, 33px);
+          font-weight: 500;
+          line-height: 1.2;
           letter-spacing: 0.08em;
           user-select: none;
           color: #ffffff;
+          text-align: center;
+          text-transform: lowercase;
           text-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
-          margin-bottom: 40px;
-          transform-origin: left top;
-          will-change: filter, opacity, transform;
+          will-change: filter, opacity;
+        }
+
+        .hero-intro-word,
+        .hero-intro-copy {
+          display: inline-block;
+          white-space: nowrap;
+        }
+
+        .about-left {
+          position: absolute;
+          left: var(--about-left-offset);
         }
 
         .about-body {
-          max-width: 680px;
+          position: absolute;
+          top: 50%;
+          left: var(--about-left-offset);
+          width: min(770px, calc(100vw - 124px));
+          max-width: 770px;
           will-change: filter, opacity, transform;
         }
 
-        .about-body p {
-          font-family: var(--font-gt-america);
-          font-size: clamp(10px, 1.2vw, 13px);
+        .about-kicker,
+        .placeholder-title {
+          font-family: var(--font-space-grotesk);
+          font-size: clamp(22px, 2.85vw, 37px);
+          font-weight: 700;
+          line-height: 1.1;
+          letter-spacing: 0.03em;
+          text-transform: lowercase;
+          color: #ffffff;
+          text-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
+          margin-bottom: 28px;
+        }
+
+        .about-kicker {
+          font-size: clamp(16px, 2.3vw, 28px);
+          font-weight: 400;
+        }
+
+        .about-body p,
+        .placeholder-body p {
+          font-family: var(--font-space-grotesk);
+          font-size: clamp(14px, 1.58vw, 19px);
           line-height: 1.75;
           color: rgba(255, 255, 255, 0.9);
           margin-bottom: 1.6em;
           letter-spacing: 0.01em;
+        }
+
+        .about-body p {
+          font-size: clamp(16px, 2.3vw, 28px);
         }
 
         .about-body p:last-child {
@@ -571,17 +622,6 @@ export default function Home() {
           will-change: opacity, filter, transform;
         }
 
-        .placeholder-title {
-          font-family: var(--font-gt-america);
-          font-size: clamp(20px, 2.6vw, 34px);
-          font-weight: 700;
-          line-height: 1.1;
-          letter-spacing: 0.03em;
-          color: #ffffff;
-          text-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
-          margin-bottom: 28px;
-        }
-
         @media (max-width: 900px) {
           .placeholder-overlay {
             grid-template-columns: 1fr;
@@ -601,15 +641,6 @@ export default function Home() {
 
         .placeholder-body {
           max-width: 520px;
-        }
-
-        .placeholder-body p {
-          font-family: var(--font-gt-america);
-          font-size: clamp(13px, 1.45vw, 17px);
-          line-height: 1.75;
-          color: rgba(255, 255, 255, 0.9);
-          margin-bottom: 1.6em;
-          letter-spacing: 0.01em;
         }
 
         .placeholder-body p:last-child {

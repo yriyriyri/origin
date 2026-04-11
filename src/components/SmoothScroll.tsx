@@ -9,14 +9,16 @@ type Props = {
   snapThreshold?: number;
   snapReleaseThreshold?: number;
   snapCooldownMs?: number;
+  snapVelocityThreshold?: number;
 };
 
 export default function SmoothScroll({
   onScroll,
   snapStops = [],
-  snapThreshold = 80,
-  snapReleaseThreshold = 140,
-  snapCooldownMs = 500,
+  snapThreshold = 42,
+  snapReleaseThreshold = 18,
+  snapCooldownMs = 140,
+  snapVelocityThreshold = 0.2,
 }: Props) {
   const onScrollRef = useRef(onScroll);
   const snapStopsRef = useRef<number[]>(snapStops);
@@ -30,9 +32,10 @@ export default function SmoothScroll({
 
   useEffect(() => {
     const lenis = new Lenis({
-      duration: 1.2,
+      duration: 0.68,
       easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
       smoothWheel: true,
+      wheelMultiplier: 1.1,
     });
 
     const findNearestStop = (scroll: number) => {
@@ -53,9 +56,11 @@ export default function SmoothScroll({
       return { stop: nearest, dist: nearestDist };
     };
 
-    lenis.on("scroll", (e: { scroll: number }) => {
+    lenis.on("scroll", (e: Lenis) => {
       const now = performance.now();
       const scroll = e.scroll;
+      const velocity = Math.abs(e.velocity);
+      const direction = e.direction;
 
       onScrollRef.current?.(scroll);
 
@@ -74,12 +79,22 @@ export default function SmoothScroll({
       const nearest = findNearestStop(scroll);
       if (!nearest) return;
 
-      if (nearest.dist <= snapThreshold) {
+      const deltaToStop = nearest.stop - scroll;
+      const movingTowardStop =
+        direction === 0 ||
+        deltaToStop === 0 ||
+        Math.sign(deltaToStop) === direction;
+
+      if (
+        nearest.dist <= snapThreshold &&
+        movingTowardStop &&
+        velocity <= snapVelocityThreshold
+      ) {
         lockedStopRef.current = nearest.stop;
         cooldownUntilRef.current = now + snapCooldownMs;
 
         lenis.scrollTo(nearest.stop, {
-          duration: 0.55,
+          duration: 0.18,
           lock: true,
           force: true,
         });
@@ -99,7 +114,12 @@ export default function SmoothScroll({
       }
       lenis.destroy();
     };
-  }, [snapThreshold, snapReleaseThreshold, snapCooldownMs]);
+  }, [
+    snapThreshold,
+    snapReleaseThreshold,
+    snapCooldownMs,
+    snapVelocityThreshold,
+  ]);
 
   return null;
 }
