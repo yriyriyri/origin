@@ -12,6 +12,11 @@ import {
   embossPostVert,
 } from "@/shaders/embossPost";
 
+import {
+  logoCompositeFrag,
+  logoCompositeVert,
+} from "@/shaders/logoComposite";
+
 const copyVert = `
 precision mediump float;
 
@@ -383,11 +388,15 @@ const LIFE_SIM_PRESET: Preset = {
 
 const COUNTS = [600, 1200, 2000, 2500, 3000] as const;
 
-export default function Boids() {
+type BoidsProps = { heightFade?: number; disperse?: number };
+
+export default function Boids({ heightFade = 1 }: BoidsProps) {
   const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const countIndex = 1;
   const mouseModeRef = useRef<MouseMode>("off");
+  const heightFadeRef = useRef(heightFade);
+  heightFadeRef.current = heightFade;
 
   const presetRef = useRef<Preset>(LIFE_SIM_PRESET);
   presetRef.current = LIFE_SIM_PRESET;
@@ -1552,7 +1561,13 @@ export default function Boids() {
       embossPostVert,
       embossPostFrag
     );
-  
+
+    const logoCompositeProgram = createProgram(
+      gl,
+      logoCompositeVert,
+      logoCompositeFrag
+    );
+
     const quadBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
     gl.bufferData(
@@ -1581,7 +1596,28 @@ export default function Boids() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  
+
+    // Logo heightmap texture — 1×1 white fallback (logoHeight = 1 - 1 = 0) until image loads
+    const logoTexture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, logoTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+
+    let logoAspect = 1.0; // width / height, updated on image load
+
+    const logoImg = new Image();
+    logoImg.onload = () => {
+      if (!runningRef.current) return;
+      logoAspect = logoImg.width / Math.max(1, logoImg.height);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+      gl.bindTexture(gl.TEXTURE_2D, logoTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, logoImg);
+    };
+    logoImg.src = "/logoheightmap.png";
+
     const passATexture = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, passATexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1691,7 +1727,15 @@ export default function Boids() {
       specularStrength: gl.getUniformLocation(embossProgram, "uSpecularStrength"),
       specularPower: gl.getUniformLocation(embossProgram, "uSpecularPower"),
     };
-  
+
+    const logoCompositeUniforms = {
+      density: gl.getUniformLocation(logoCompositeProgram, "uDensity"),
+      logo: gl.getUniformLocation(logoCompositeProgram, "uLogo"),
+      logoPos: gl.getUniformLocation(logoCompositeProgram, "uLogoPos"),
+      logoSize: gl.getUniformLocation(logoCompositeProgram, "uLogoSize"),
+      intensity: gl.getUniformLocation(logoCompositeProgram, "uIntensity"),
+    };
+
     const renderPost = () => {
       const { w, h, dpr } = sizeRef.current;
       const rw = Math.max(1, Math.floor(w * dpr));
@@ -1752,18 +1796,48 @@ export default function Boids() {
         gl.uniform1f(densityResolveUniforms.densityGain, DENSITY_GAIN);
     
         gl.drawArrays(gl.TRIANGLES, 0, 6);
-    
+
+        {
+          const logoWidthUV = 0.15;
+          const logoHeightUV = logoWidthUV / logoAspect * (densityW / densityH);
+          const logoPadX = 0.18;
+          const logoPadY = 0.15;
+          const logoPosX = logoPadX;
+          const logoPosY = 1.0 - logoPadY - logoHeightUV;
+
+          gl.bindFramebuffer(gl.FRAMEBUFFER, passBFramebuffer);
+          gl.viewport(0, 0, densityW, densityH);
+          gl.useProgram(logoCompositeProgram);
+          bindFullscreenQuad(logoCompositeProgram);
+
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, passATexture);
+          gl.uniform1i(logoCompositeUniforms.density, 0);
+
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, logoTexture);
+          gl.uniform1i(logoCompositeUniforms.logo, 1);
+
+          gl.uniform2f(logoCompositeUniforms.logoPos, logoPosX, logoPosY);
+          gl.uniform2f(logoCompositeUniforms.logoSize, logoWidthUV, logoHeightUV);
+          gl.uniform1f(logoCompositeUniforms.intensity, heightFadeRef.current);
+
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+          gl.activeTexture(gl.TEXTURE0);
+        }
+
         if (ENABLE_EMBOSS) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           gl.viewport(0, 0, rw, rh);
           gl.useProgram(embossProgram);
           bindFullscreenQuad(embossProgram);
-    
+
           gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, passATexture);
+          gl.bindTexture(gl.TEXTURE_2D, passBTexture);
           gl.uniform1i(embossUniforms.texture, 0);
           gl.uniform2f(embossUniforms.resolution, densityW, densityH);
-          gl.uniform1f(embossUniforms.heightScale, EMBOSS_HEIGHT_SCALE);
+          gl.uniform1f(embossUniforms.heightScale, EMBOSS_HEIGHT_SCALE * heightFadeRef.current);
           gl.uniform2f(embossUniforms.lightDir, EMBOSS_LIGHT_X, EMBOSS_LIGHT_Y);
           gl.uniform3f(embossUniforms.baseColor, 0.9, 0.9, 0.9);
           gl.uniform1f(embossUniforms.ambient, EMBOSS_AMBIENT);
@@ -1771,18 +1845,18 @@ export default function Boids() {
           gl.uniform1f(embossUniforms.shadowStrength, EMBOSS_SHADOW);
           gl.uniform1f(embossUniforms.specularStrength, EMBOSS_SPECULAR);
           gl.uniform1f(embossUniforms.specularPower, EMBOSS_SPECULAR_POWER);
-    
+
           gl.drawArrays(gl.TRIANGLES, 0, 6);
           return;
         }
-    
+
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, rw, rh);
         gl.useProgram(copyProgram);
         bindFullscreenQuad(copyProgram);
-    
+
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, passATexture);
+        gl.bindTexture(gl.TEXTURE_2D, passBTexture);
         gl.uniform1i(copyUniforms.texture, 0);
     
         gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -1882,6 +1956,8 @@ export default function Boids() {
       gl.deleteProgram(blurProgram);
       gl.deleteProgram(densityResolveProgram);
       gl.deleteProgram(embossProgram);
+      gl.deleteTexture(logoTexture);
+      gl.deleteProgram(logoCompositeProgram);
     };
   }, []);
 
