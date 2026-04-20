@@ -506,7 +506,7 @@ export default function Home() {
           z-index: 4;
           pointer-events: none;
           filter: var(--site-filter);
-          opacity: calc(0.6 * var(--scroll-overlay-opacity));
+          opacity: calc(0.72 * var(--scroll-overlay-opacity));
           transform: translateX(var(--scroll-overlay-translate));
           transition:
             opacity 180ms ease,
@@ -517,9 +517,9 @@ export default function Home() {
           position: absolute;
           right: 28px;
           top: 0;
-          width: 2px;
+          width: 4px;
           height: 100%;
-          background: rgba(255, 255, 255, 0.22);
+          background: rgba(255, 255, 255, 0.1);
         }
 
         .scroll-progress-indicator::after {
@@ -691,7 +691,7 @@ export default function Home() {
 
           .scroll-progress-indicator {
             right: 20px;
-            width: 2px;
+            width: 4px;
           }
 
           .placeholder-overlay {
