@@ -23,7 +23,6 @@ export const BOIDS_STUDIO_DENSITY_COUNTS = [
   2000,
   1200,
   600,
-
 ] as const;
 
 export const STUDIO_MODE_LABELS: Record<StudioMode, string> = {

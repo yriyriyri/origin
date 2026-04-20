@@ -34,38 +34,66 @@ const HERO_ABOUT_OUT_START = 1.28;
 const HERO_ABOUT_OUT_DURATION = 0.56;
 const HERO_EXIT_START = 1.12;
 const HERO_EXIT_DURATION = 0.88;
+const HERO_TITLE_FOCUS_EXTENSION = 0.34;
+const HERO_ABOUT_FOCUS_EXTENSION = 0.56;
+const HERO_ABOUT_IN_START =
+  HERO_CONTENT_OFFSET + HERO_TITLE_FOCUS_EXTENSION;
+const HERO_TITLE_OUT_START =
+  HERO_TITLE_RETURN_END + HERO_TITLE_FOCUS_EXTENSION;
+const HERO_ABOUT_OUT_START_SCROLL =
+  HERO_CONTENT_OFFSET +
+  HERO_ABOUT_OUT_START +
+  HERO_TITLE_FOCUS_EXTENSION +
+  HERO_ABOUT_FOCUS_EXTENSION;
+const HERO_EXIT_START_SCROLL =
+  HERO_CONTENT_OFFSET +
+  HERO_EXIT_START +
+  HERO_TITLE_FOCUS_EXTENSION +
+  HERO_ABOUT_FOCUS_EXTENSION;
+const HERO_SCROLL_SPACER_VH =
+  2 + HERO_TITLE_FOCUS_EXTENSION + HERO_ABOUT_FOCUS_EXTENSION;
 const PLACEHOLDER_FADE_IN = 0.24;
 const PLACEHOLDER_HOLD = 0.62;
 const PLACEHOLDER_FADE_OUT = 1 - PLACEHOLDER_HOLD;
+const PLACEHOLDER_FOCUS_EXTENSION = 0.44;
+const PLACEHOLDER_ACTIVE_HOLD =
+  PLACEHOLDER_HOLD + PLACEHOLDER_FOCUS_EXTENSION;
+const PLACEHOLDER_STEP = PLACEHOLDER_ACTIVE_HOLD + PLACEHOLDER_FADE_OUT;
 
 const getAgentCardVisibility = (phase: number, isLast: boolean) => {
   let visibility = 0;
 
   if (phase >= -PLACEHOLDER_FADE_IN && phase < 0) {
     visibility = ease((phase + PLACEHOLDER_FADE_IN) / PLACEHOLDER_FADE_IN);
-  } else if (phase >= 0 && phase <= PLACEHOLDER_HOLD) {
+  } else if (phase >= 0 && phase <= PLACEHOLDER_ACTIVE_HOLD) {
     visibility = 1;
-  } else if (phase > PLACEHOLDER_HOLD) {
+  } else if (phase > PLACEHOLDER_ACTIVE_HOLD) {
     visibility = isLast
       ? 1
-      : 1 - ease((phase - PLACEHOLDER_HOLD) / PLACEHOLDER_FADE_OUT);
+      : 1 - ease((phase - PLACEHOLDER_ACTIVE_HOLD) / PLACEHOLDER_FADE_OUT);
   }
 
   return clamp01(visibility);
 };
 
 const getAgentDisplayValue = (timeline: number, total: number) => {
-  if (timeline <= 0) return 1;
+  const lastStart = (total - 1) * PLACEHOLDER_STEP;
+  const capped = Math.min(
+    Math.max(0, timeline),
+    lastStart + PLACEHOLDER_ACTIVE_HOLD
+  );
+  const index = Math.min(total - 1, Math.floor(capped / PLACEHOLDER_STEP));
+  const phase = capped - index * PLACEHOLDER_STEP;
 
-  const capped = Math.min(timeline, total - 1 + PLACEHOLDER_HOLD);
-  const index = Math.min(total - 1, Math.floor(capped));
-  const phase = capped - index;
-
-  if (index === total - 1 || phase <= PLACEHOLDER_HOLD) {
+  if (index === total - 1 || phase <= PLACEHOLDER_ACTIVE_HOLD) {
     return index + 1;
   }
 
-  return index + 1 + clamp01((phase - PLACEHOLDER_HOLD) / PLACEHOLDER_FADE_OUT);
+  return (
+    index +
+    1 +
+    clamp01((phase - PLACEHOLDER_ACTIVE_HOLD) / PLACEHOLDER_FADE_OUT)
+  );
 };
 
 const getPixelateFilter = (progress: number) => {
@@ -90,43 +118,6 @@ const getPixelateOpacity = (progress: number) => {
 
   const ramp = ease(Math.min(1, active / PIXELATE_OPACITY_RAMP));
   return 1 - PIXELATE_OPACITY_DROP * ramp;
-};
-
-const getSnapStops = (
-  vh: number,
-  placeholderSection: HTMLElement | null
-): number[] => {
-  const stops: number[] = [];
-  const aboutSharpMidpoint =
-    HERO_CONTENT_OFFSET +
-    HERO_ABOUT_IN_END +
-    (HERO_ABOUT_OUT_START - HERO_ABOUT_IN_END) * 0.5;
-
-  stops.push(vh * aboutSharpMidpoint);
-
-  if (!placeholderSection) {
-    return stops;
-  }
-
-  const rect = placeholderSection.getBoundingClientRect();
-  const sectionTop = window.scrollY + rect.top;
-  const stickyTravel = Math.max(1, placeholderSection.offsetHeight - vh);
-
-  const totalSpan = PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN;
-
-  for (let index = 0; index < PLACEHOLDER_PAIRS.length; index++) {
-    const timelineMid =
-      index === PLACEHOLDER_PAIRS.length - 1
-        ? index
-        : index + PLACEHOLDER_HOLD * 0.5;
-
-    const localProgress =
-      (timelineMid + PLACEHOLDER_FADE_IN) / totalSpan;
-
-    stops.push(sectionTop + localProgress * stickyTravel);
-  }
-
-  return stops;
 };
 
 const PLACEHOLDER_PAIRS = [
@@ -154,32 +145,50 @@ export default function Home() {
   const [aboutFadeProgress, setAboutFadeProgress] = useState(0);
   const [exitProgress, setExitProgress] = useState(0);
   const [placeholderProgress, setPlaceholderProgress] = useState(0);
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [showScrollProgress, setShowScrollProgress] = useState(false);
   const placeholderSectionRef = useRef<HTMLElement | null>(null);
+  const scrollOverlayTimeoutRef = useRef<number | null>(null);
   const [siteInvert, setSiteInvert] = useState(false);
-  const [snapStops, setSnapStops] = useState<number[]>([]);
 
-  const handleScroll = useCallback((scroll: number) => {
+  const handleScroll = useCallback((scroll: number, showIndicator = true) => {
     const vh = window.innerHeight;
+    const doc = document.documentElement;
+    const maxScroll = Math.max(1, doc.scrollHeight - vh);
+
+    setScrollProgress(clamp01(scroll / maxScroll));
+    if (showIndicator) {
+      setShowScrollProgress(true);
+
+      if (scrollOverlayTimeoutRef.current !== null) {
+        window.clearTimeout(scrollOverlayTimeoutRef.current);
+      }
+
+      scrollOverlayTimeoutRef.current = window.setTimeout(() => {
+        setShowScrollProgress(false);
+        scrollOverlayTimeoutRef.current = null;
+      }, 160);
+    }
 
     const about = clamp01(
-      (scroll - vh * HERO_CONTENT_OFFSET) / (vh * HERO_ABOUT_IN_END)
+      (scroll - vh * HERO_ABOUT_IN_START) / (vh * HERO_ABOUT_IN_END)
     );
     setAboutProgress(about);
 
     const title = clamp01(
-      (scroll - vh * HERO_TITLE_RETURN_END) /
+      (scroll - vh * HERO_TITLE_OUT_START) /
         (vh * Math.max(0.001, HERO_ABOUT_IN_END - HERO_TITLE_RETURN_END))
     );
     setTitleProgress(title);
 
     const aboutFade = clamp01(
-      (scroll - vh * (HERO_ABOUT_OUT_START + HERO_CONTENT_OFFSET)) /
+      (scroll - vh * HERO_ABOUT_OUT_START_SCROLL) /
         (vh * HERO_ABOUT_OUT_DURATION)
     );
     setAboutFadeProgress(aboutFade);
 
     const exit = clamp01(
-      (scroll - vh * (HERO_EXIT_START + HERO_CONTENT_OFFSET)) /
+      (scroll - vh * HERO_EXIT_START_SCROLL) /
         (vh * HERO_EXIT_DURATION)
     );
     setExitProgress(exit);
@@ -223,7 +232,7 @@ export default function Home() {
 
   useEffect(() => {
     const syncScrollState = () => {
-      handleScroll(window.scrollY);
+      handleScroll(window.scrollY, false);
     };
 
     syncScrollState();
@@ -235,17 +244,10 @@ export default function Home() {
   }, [handleScroll]);
 
   useEffect(() => {
-    const updateSnapStops = () => {
-      setSnapStops(
-        getSnapStops(window.innerHeight, placeholderSectionRef.current)
-      );
-    };
-  
-    updateSnapStops();
-    window.addEventListener("resize", updateSnapStops);
-  
     return () => {
-      window.removeEventListener("resize", updateSnapStops);
+      if (scrollOverlayTimeoutRef.current !== null) {
+        window.clearTimeout(scrollOverlayTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -262,10 +264,11 @@ export default function Home() {
   const titleOpacity = (1 - titleProgress) * getPixelateOpacity(titlePixelate);
 
   const hintOpacity = Math.max(0, 1 - aboutProgress * 3);
+  const placeholderTotalSpan =
+    (PLACEHOLDER_PAIRS.length - 1) * PLACEHOLDER_STEP + PLACEHOLDER_FADE_IN;
   const placeholderTimeline =
     -PLACEHOLDER_FADE_IN +
-    placeholderProgress *
-      (PLACEHOLDER_PAIRS.length - 1 + PLACEHOLDER_FADE_IN);
+    placeholderProgress * placeholderTotalSpan;
 
   const innatePhase = placeholderTimeline;
   const boidsOverlayOpacity = clamp01(
@@ -275,7 +278,7 @@ export default function Home() {
   const disperseAmount = exitProgress * (1 - boidsOverlayOpacity * 0.85);
 
   const placeholderOverlayOpacity = PLACEHOLDER_PAIRS.reduce((maxVisibility, _, index) => {
-    const phase = placeholderTimeline - index;
+    const phase = placeholderTimeline - index * PLACEHOLDER_STEP;
     const visibility = getAgentCardVisibility(
       phase,
       index === PLACEHOLDER_PAIRS.length - 1
@@ -324,15 +327,14 @@ export default function Home() {
 
       <SmoothScroll
         onScroll={handleScroll}
-        snapStops={snapStops}
-        snapThreshold={42}
-        snapReleaseThreshold={8}
-        snapCooldownMs={70}
       />
 
       <main
         style={
           {
+            "--scroll-overlay-opacity": showScrollProgress ? "1" : "0",
+            "--scroll-overlay-translate": showScrollProgress ? "0px" : "12px",
+            "--scroll-progress": scrollProgress.toString(),
             "--site-filter": siteInvert
               ? "invert(1) grayscale(1)"
               : "none",
@@ -345,6 +347,10 @@ export default function Home() {
             className="boids-fade"
             style={{ opacity: boidsOverlayOpacity }}
           />
+        </div>
+
+        <div className="scroll-progress-overlay">
+          <div className="scroll-progress-indicator" />
         </div>
 
         <div className="fixed-overlay">
@@ -405,7 +411,7 @@ export default function Home() {
         <div className="placeholder-overlay">
           <div className="placeholder-copy">
             {PLACEHOLDER_PAIRS.map((pair, index) => {
-              const phase = placeholderTimeline - index;
+              const phase = placeholderTimeline - index * PLACEHOLDER_STEP;
               const visibility = getAgentCardVisibility(
                 phase,
                 index === PLACEHOLDER_PAIRS.length - 1
@@ -489,6 +495,40 @@ export default function Home() {
           pointer-events: none;
           padding: 40px 48px;
           filter: var(--site-filter);
+        }
+
+        .scroll-progress-overlay {
+          position: fixed;
+          top: 28px;
+          right: 0;
+          width: 72px;
+          height: calc(100vh - 56px);
+          z-index: 4;
+          pointer-events: none;
+          filter: var(--site-filter);
+          opacity: calc(0.6 * var(--scroll-overlay-opacity));
+          transform: translateX(var(--scroll-overlay-translate));
+          transition:
+            opacity 180ms ease,
+            transform 180ms ease;
+        }
+
+        .scroll-progress-indicator {
+          position: absolute;
+          right: 28px;
+          top: 0;
+          width: 2px;
+          height: 100%;
+          background: rgba(255, 255, 255, 0.22);
+        }
+
+        .scroll-progress-indicator::after {
+          content: "";
+          position: absolute;
+          inset: 0 auto auto 0;
+          width: 100%;
+          height: calc(var(--scroll-progress) * 100%);
+          background: #ffffff;
         }
 
         .placeholder-overlay {
@@ -627,13 +667,13 @@ export default function Home() {
         }
 
         .scroll-spacer {
-          height: 200vh;
+          height: ${HERO_SCROLL_SPACER_VH * 100}vh;
           pointer-events: none;
         }
 
         .placeholder-section {
           position: relative;
-          height: ${(PLACEHOLDER_PAIRS.length + PLACEHOLDER_FADE_IN) * 100}vh;
+          height: ${(1 + (PLACEHOLDER_PAIRS.length - 1) * PLACEHOLDER_STEP + PLACEHOLDER_FADE_IN) * 100}vh;
         }
 
         .placeholder-card {
@@ -643,6 +683,17 @@ export default function Home() {
         }
 
         @media (max-width: 900px) {
+          .scroll-progress-overlay {
+            top: 20px;
+            width: 52px;
+            height: calc(100vh - 40px);
+          }
+
+          .scroll-progress-indicator {
+            right: 20px;
+            width: 2px;
+          }
+
           .placeholder-overlay {
             padding: 40px 24px 120px;
           }
