@@ -20,9 +20,17 @@ import {
   radialGlowVert,
 } from "@/components/shaders/radialGlow";
 import {
+  vignetteFrag,
+  vignetteVert,
+} from "@/components/shaders/vignette";
+import {
   DESKTOP_CANVAS_RUNTIME,
   type CanvasRuntimeProfile,
 } from "@/lib/canvasRuntime";
+import {
+  isRuntimeProfilerEnabled,
+  recordRuntimeMetric,
+} from "@/lib/runtimeProfiler";
 
 type CymaticVisualizerProps = {
   className?: string;
@@ -56,6 +64,12 @@ type Particle = {
   vy: number;
   x: number;
   y: number;
+};
+
+type FieldEvaluation = {
+  field: number;
+  gradX: number;
+  gradY: number;
 };
 
 const copyVert = `
@@ -98,7 +112,6 @@ const AGENT_COLORS: Rgb[] = [
 ];
 const CENTER_REPEL_RADIUS = 0.18;
 const CENTER_REPEL_STRENGTH = 0.0048;
-const FIELD_EPSILON = 0.014;
 const NODE_PULL_MIX = 0.78;
 const NODE_PROJECTION_STEPS = 2;
 const NODE_CLOSENESS_RANGE = 2.2;
@@ -108,7 +121,15 @@ const COLOR_BRIGHTNESS_BOOST = 1.01;
 const HUE_SHIFT_MAX = 0.32;
 const TARGET_AGENT_LUMA = 0.62;
 const MAX_LUMA_LIFT = 1.0;
-const ASCII_PIXELATION = 0.82;
+const ASCII_PIXELATION = 0.5;
+const CHROMATIC_STRENGTH = 0.003;
+const GLOW_STRENGTH = 2.4;
+const GLOW_RADIUS = 7.0;
+const GLOW_RADIAL_STRENGTH = 0.8;
+const GLOW_RADIAL_FALLOFF = 1.45;
+const VIGNETTE_STRENGTH = 3.0;
+const VIGNETTE_POWER = 1.1;
+const VIGNETTE_ZOOM = 1.5;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -232,76 +253,90 @@ const getColorValueFromModePair = (mode: ModePair) => {
   return 1 + normalized * (AGENT_COLORS.length - 1);
 };
 
-const chladni = (x: number, y: number, mode: ModePair) => {
+const sampleModeField = (x: number, y: number, mode: ModePair): FieldEvaluation => {
   const scale = Math.PI * 0.5;
-  return (
-    Math.cos(mode.n * scale * x) * Math.cos(mode.m * scale * y) -
-    Math.cos(mode.m * scale * x) * Math.cos(mode.n * scale * y)
-  );
+  const nx = mode.n * scale * x;
+  const mx = mode.m * scale * x;
+  const ny = mode.n * scale * y;
+  const my = mode.m * scale * y;
+
+  const cosNx = Math.cos(nx);
+  const sinNx = Math.sin(nx);
+  const cosMx = Math.cos(mx);
+  const sinMx = Math.sin(mx);
+  const cosNy = Math.cos(ny);
+  const sinNy = Math.sin(ny);
+  const cosMy = Math.cos(my);
+  const sinMy = Math.sin(my);
+
+  return {
+    field: cosNx * cosMy - cosMx * cosNy,
+    gradX:
+      -mode.n * scale * sinNx * cosMy +
+      mode.m * scale * sinMx * cosNy,
+    gradY:
+      -mode.m * scale * cosNx * sinMy +
+      mode.n * scale * cosMx * sinNy,
+  };
 };
 
-const fieldValue = (x: number, y: number, value: number) => {
-  const { a, b, mix } = getBlend(value);
-  const fa = chladni(x, y, a);
-  const fb = chladni(x, y, b);
-  return lerp(fa, fb, mix);
+const sampleBlendedField = (
+  x: number,
+  y: number,
+  blend: ReturnType<typeof getBlend>
+): FieldEvaluation => {
+  const sampleA = sampleModeField(x, y, blend.a);
+  if (blend.mix <= 1e-6) {
+    return sampleA;
+  }
+
+  const sampleB = sampleModeField(x, y, blend.b);
+  return {
+    field: lerp(sampleA.field, sampleB.field, blend.mix),
+    gradX: lerp(sampleA.gradX, sampleB.gradX, blend.mix),
+    gradY: lerp(sampleA.gradY, sampleB.gradY, blend.mix),
+  };
 };
 
-const fieldValueForMode = (x: number, y: number, mode: ModePair) =>
-  chladni(x, y, mode);
+const sampleEnergyGradientFromField = (sample: FieldEvaluation) => {
+  const energy = sample.field * sample.field;
+  return {
+    energy,
+    gradientX: 2 * sample.field * sample.gradX,
+    gradientY: 2 * sample.field * sample.gradY,
+  };
+};
 
-const fieldEnergy = (x: number, y: number, value: number) => {
-  const field = fieldValue(x, y, value);
-  return field * field;
+const fieldEnergy = (
+  x: number,
+  y: number,
+  blend: ReturnType<typeof getBlend>
+) => {
+  const sample = sampleBlendedField(x, y, blend);
+  return sample.field * sample.field;
 };
 
 const fieldEnergyForMode = (x: number, y: number, mode: ModePair) => {
-  const field = fieldValueForMode(x, y, mode);
-  return field * field;
-};
-
-const sampleEnergyGradient = (x: number, y: number, value: number) => {
-  const energy = fieldEnergy(x, y, value);
-  const gradientX = (
-    fieldEnergy(x + FIELD_EPSILON, y, value) -
-    fieldEnergy(x - FIELD_EPSILON, y, value)
-  ) / (FIELD_EPSILON * 2);
-  const gradientY = (
-    fieldEnergy(x, y + FIELD_EPSILON, value) -
-    fieldEnergy(x, y - FIELD_EPSILON, value)
-  ) / (FIELD_EPSILON * 2);
-
-  return { energy, gradientX, gradientY };
-};
-
-const sampleEnergyGradientForMode = (x: number, y: number, mode: ModePair) => {
-  const energy = fieldEnergyForMode(x, y, mode);
-  const gradientX = (
-    fieldEnergyForMode(x + FIELD_EPSILON, y, mode) -
-    fieldEnergyForMode(x - FIELD_EPSILON, y, mode)
-  ) / (FIELD_EPSILON * 2);
-  const gradientY = (
-    fieldEnergyForMode(x, y + FIELD_EPSILON, mode) -
-    fieldEnergyForMode(x, y - FIELD_EPSILON, mode)
-  ) / (FIELD_EPSILON * 2);
-
-  return { energy, gradientX, gradientY };
+  const sample = sampleModeField(x, y, mode);
+  return sample.field * sample.field;
 };
 
 const projectTowardNode = (
   x: number,
   y: number,
-  value: number,
+  blend: ReturnType<typeof getBlend>,
   projectionSteps: number
 ) => {
-  const source = sampleEnergyGradient(x, y, value);
+  const source = sampleEnergyGradientFromField(sampleBlendedField(x, y, blend));
   let projectedX = x;
   let projectedY = y;
   let gradientX = source.gradientX;
   let gradientY = source.gradientY;
 
   for (let step = 0; step < projectionSteps; step++) {
-    const sample = sampleEnergyGradient(projectedX, projectedY, value);
+    const sample = sampleEnergyGradientFromField(
+      sampleBlendedField(projectedX, projectedY, blend)
+    );
     gradientX = sample.gradientX;
     gradientY = sample.gradientY;
 
@@ -328,14 +363,16 @@ const projectTowardNodeForMode = (
   mode: ModePair,
   projectionSteps: number
 ) => {
-  const source = sampleEnergyGradientForMode(x, y, mode);
+  const source = sampleEnergyGradientFromField(sampleModeField(x, y, mode));
   let projectedX = x;
   let projectedY = y;
   let gradientX = source.gradientX;
   let gradientY = source.gradientY;
 
   for (let step = 0; step < projectionSteps; step++) {
-    const sample = sampleEnergyGradientForMode(projectedX, projectedY, mode);
+    const sample = sampleEnergyGradientFromField(
+      sampleModeField(projectedX, projectedY, mode)
+    );
     gradientX = sample.gradientX;
     gradientY = sample.gradientY;
 
@@ -412,6 +449,7 @@ export default function CymaticVisualizer({
   const ENABLE_ASCII = cymaticsRuntime.passes.ascii;
   const ENABLE_CHROMATIC = cymaticsRuntime.passes.chromatic;
   const ENABLE_RADIAL_GLOW = cymaticsRuntime.passes.glow;
+  const ENABLE_VIGNETTE = cymaticsRuntime.passes.vignette;
   const densityMultiplier =
     (studioSettings?.particleDensity ?? 1) * cymaticsRuntime.densityMultiplier;
 
@@ -498,6 +536,7 @@ export default function CymaticVisualizer({
     let asciiProgram: WebGLProgram | null = null;
     let chromaticProgram: WebGLProgram | null = null;
     let glowProgram: WebGLProgram | null = null;
+    let vignetteProgram: WebGLProgram | null = null;
     let quadBuffer: WebGLBuffer | null = null;
     let sourceTexture: WebGLTexture | null = null;
     let passATexture: WebGLTexture | null = null;
@@ -541,6 +580,14 @@ export default function CymaticVisualizer({
         radialFalloff: WebGLUniformLocation | null;
       }
     | null = null;
+    let vignetteUniforms:
+      | {
+          texture: WebGLUniformLocation | null;
+          strength: WebGLUniformLocation | null;
+          power: WebGLUniformLocation | null;
+          zoom: WebGLUniformLocation | null;
+        }
+      | null = null;
 
     const allocPassTargets = () => {
       if (
@@ -621,11 +668,13 @@ export default function CymaticVisualizer({
         !asciiProgram ||
         !chromaticProgram ||
         !glowProgram ||
+        !vignetteProgram ||
         !copyUniforms ||
         !blurUniforms ||
         !asciiUniforms ||
         !chromaticUniforms ||
         !glowUniforms ||
+        !vignetteUniforms ||
         !sourceTexture ||
         !passATexture ||
         !passAFramebuffer ||
@@ -643,18 +692,19 @@ export default function CymaticVisualizer({
       const localAsciiProgram = asciiProgram;
       const localChromaticProgram = chromaticProgram;
       const localGlowProgram = glowProgram;
+      const localVignetteProgram = vignetteProgram;
       const localCopyUniforms = copyUniforms;
       const localBlurUniforms = blurUniforms;
       const localAsciiUniforms = asciiUniforms;
       const localChromaticUniforms = chromaticUniforms;
       const localGlowUniforms = glowUniforms;
+      const localVignetteUniforms = vignetteUniforms;
       const localSourceTexture = sourceTexture;
       const localPassATexture = passATexture;
       const localPassAFramebuffer = passAFramebuffer;
       const localPassBTexture = passBTexture;
       const localPassBFramebuffer = passBFramebuffer;
 
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, localSourceTexture);
       gl.texImage2D(
@@ -725,9 +775,9 @@ export default function CymaticVisualizer({
           localChromaticProgram,
           () => {
             gl.uniform1i(localChromaticUniforms.texture, 0);
-            gl.uniform1f(localChromaticUniforms.time, timeMs * 0.001);
+            gl.uniform1f(localChromaticUniforms.time, 0);
             gl.uniform2f(localChromaticUniforms.resolution, renderW, renderH);
-            gl.uniform1f(localChromaticUniforms.strength, 0.003);
+            gl.uniform1f(localChromaticUniforms.strength, CHROMATIC_STRENGTH);
           },
           currentTexture
         );
@@ -739,10 +789,29 @@ export default function CymaticVisualizer({
           () => {
             gl.uniform1i(localGlowUniforms.texture, 0);
             gl.uniform2f(localGlowUniforms.resolution, renderW, renderH);
-            gl.uniform1f(localGlowUniforms.glowStrength, 1.8);
-            gl.uniform1f(localGlowUniforms.glowRadius, 7.0);
-            gl.uniform1f(localGlowUniforms.radialStrength, 0.8);
-            gl.uniform1f(localGlowUniforms.radialFalloff, 1.45);
+            gl.uniform1f(localGlowUniforms.glowStrength, GLOW_STRENGTH);
+            gl.uniform1f(localGlowUniforms.glowRadius, GLOW_RADIUS);
+            gl.uniform1f(
+              localGlowUniforms.radialStrength,
+              GLOW_RADIAL_STRENGTH
+            );
+            gl.uniform1f(
+              localGlowUniforms.radialFalloff,
+              GLOW_RADIAL_FALLOFF
+            );
+          },
+          currentTexture
+        );
+      }
+
+      if (ENABLE_VIGNETTE) {
+        renderPassToFbo(
+          localVignetteProgram,
+          () => {
+            gl.uniform1i(localVignetteUniforms.texture, 0);
+            gl.uniform1f(localVignetteUniforms.strength, VIGNETTE_STRENGTH);
+            gl.uniform1f(localVignetteUniforms.power, VIGNETTE_POWER);
+            gl.uniform1f(localVignetteUniforms.zoom, VIGNETTE_ZOOM);
           },
           currentTexture
         );
@@ -764,6 +833,7 @@ export default function CymaticVisualizer({
     };
 
     if (gl) {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
       copyProgram = createProgram(gl, copyVert, copyFrag);
       blurProgram = createProgram(gl, horizontalBlurVert, horizontalBlurFrag);
       asciiProgram = createProgram(gl, asciiPostVert, asciiPostFrag);
@@ -773,6 +843,7 @@ export default function CymaticVisualizer({
         temporalChromaticAberrationFrag
       );
       glowProgram = createProgram(gl, radialGlowVert, radialGlowFrag);
+      vignetteProgram = createProgram(gl, vignetteVert, vignetteFrag);
 
       quadBuffer = gl.createBuffer()!;
       gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
@@ -839,6 +910,12 @@ export default function CymaticVisualizer({
         glowRadius: gl.getUniformLocation(glowProgram, "uGlowRadius"),
         radialStrength: gl.getUniformLocation(glowProgram, "uRadialStrength"),
         radialFalloff: gl.getUniformLocation(glowProgram, "uRadialFalloff"),
+      };
+      vignetteUniforms = {
+        texture: gl.getUniformLocation(vignetteProgram, "uTexture"),
+        strength: gl.getUniformLocation(vignetteProgram, "uStrength"),
+        power: gl.getUniformLocation(vignetteProgram, "uPower"),
+        zoom: gl.getUniformLocation(vignetteProgram, "uZoom"),
       };
     }
 
@@ -943,6 +1020,7 @@ export default function CymaticVisualizer({
             m: harmonicMRef.current,
           }
         : null;
+      const blendedField = customMode ? null : getBlend(simValueRef.current);
       const baseAgentColor = getBlendedAgentColor(
         customMode ? getColorValueFromModePair(customMode) : simValueRef.current
       );
@@ -950,6 +1028,10 @@ export default function CymaticVisualizer({
       const pulseLegacyBlend = customMode
         ? 0
         : getPulseLegacyBlend(simValueRef.current);
+      const profilerEnabled = isRuntimeProfilerEnabled();
+      const frameStartedAt = profilerEnabled ? performance.now() : 0;
+      const simStartedAt = profilerEnabled ? performance.now() : 0;
+      const projectStartedAt = profilerEnabled ? performance.now() : 0;
 
       for (let i = 0; i < particles.length; i++) {
         const particle = particles[i];
@@ -963,7 +1045,7 @@ export default function CymaticVisualizer({
           : projectTowardNode(
               particle.homeX,
               particle.homeY,
-              simValueRef.current,
+              blendedField!,
               cymaticsRuntime.nodeProjectionSteps
             );
         const desiredX = lerp(particle.homeX, projection.x, nodePullRef.current);
@@ -1020,9 +1102,18 @@ export default function CymaticVisualizer({
 
         particle.energy = customMode
           ? fieldEnergyForMode(particle.x, particle.y, customMode)
-          : fieldEnergy(particle.x, particle.y, simValueRef.current);
+          : fieldEnergy(particle.x, particle.y, blendedField!);
       }
 
+      if (profilerEnabled) {
+        recordRuntimeMetric(
+          "cymatics.project",
+          performance.now() - projectStartedAt
+        );
+        recordRuntimeMetric("cymatics.sim", performance.now() - simStartedAt);
+      }
+
+      const drawStartedAt = profilerEnabled ? performance.now() : 0;
       for (let i = 0; i < particles.length; i++) {
         const particle = particles[i];
         const px = padX + (particle.x * 0.5 + 0.5) * viewW;
@@ -1082,8 +1173,22 @@ export default function CymaticVisualizer({
         ctx.fillRect(px - size * 0.5, py - size * 0.5, size, size);
       }
 
+      if (profilerEnabled) {
+        recordRuntimeMetric("cymatics.draw", performance.now() - drawStartedAt);
+      }
+
       if (renderMode === "full") {
-        renderPost(time);
+        if (profilerEnabled) {
+          const postStartedAt = performance.now();
+          renderPost(time);
+          recordRuntimeMetric("cymatics.post", performance.now() - postStartedAt);
+        } else {
+          renderPost(time);
+        }
+      }
+
+      if (profilerEnabled) {
+        recordRuntimeMetric("cymatics.frame", performance.now() - frameStartedAt);
       }
     };
 
@@ -1109,6 +1214,7 @@ export default function CymaticVisualizer({
         if (asciiProgram) gl.deleteProgram(asciiProgram);
         if (chromaticProgram) gl.deleteProgram(chromaticProgram);
         if (glowProgram) gl.deleteProgram(glowProgram);
+        if (vignetteProgram) gl.deleteProgram(vignetteProgram);
       }
     };
   }, [cymaticsRuntime, densityMultiplier, renderMode, sourceCanvasRef]);

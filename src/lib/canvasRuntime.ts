@@ -13,6 +13,7 @@ export type CymaticsPassConfig = {
   blur: boolean;
   chromatic: boolean;
   glow: boolean;
+  vignette: boolean;
 };
 
 export type CanvasRuntimeProfile = {
@@ -51,7 +52,7 @@ export const DESKTOP_CANVAS_RUNTIME: CanvasRuntimeProfile = {
       ascii: true,
       chromatic: true,
       glow: true,
-      vignette: true,
+      vignette: false,
     },
   },
   cymatics: {
@@ -68,6 +69,7 @@ export const DESKTOP_CANVAS_RUNTIME: CanvasRuntimeProfile = {
       ascii: true,
       chromatic: true,
       glow: true,
+      vignette: true,
     },
   },
 };
@@ -102,6 +104,7 @@ export const MOBILE_CANVAS_RUNTIME: CanvasRuntimeProfile = {
       ascii: true,
       chromatic: false,
       glow: true,
+      vignette: true,
     },
   },
 };

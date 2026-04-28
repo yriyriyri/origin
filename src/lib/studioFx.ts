@@ -74,7 +74,7 @@ const PRESET_SETTINGS: Record<
     vignette: {
       enabled: false,
       uniforms: {
-        strength: 3,
+        strength: 1,
         power: 1.1,
         zoom: 1.5,
       },

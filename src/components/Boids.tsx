@@ -33,6 +33,10 @@ import {
   DESKTOP_CANVAS_RUNTIME,
   type CanvasRuntimeProfile,
 } from "@/lib/canvasRuntime";
+import {
+  isRuntimeProfilerEnabled,
+  recordRuntimeMetric,
+} from "@/lib/runtimeProfiler";
 
 const copyVert = `
 precision mediump float;
@@ -56,6 +60,21 @@ void main() {
   gl_FragColor = texture2D(uTexture, vUv);
 }
 `;
+
+const CREATURE_BLUR_AMOUNT = 6.0;
+const CREATURE_ASCII_PIXELATION = 0.7;
+const CREATURE_CHROMATIC_STRENGTH = 0.003;
+const CREATURE_GLOW_STRENGTH = 2.0;
+const CREATURE_GLOW_RADIUS = 6.0;
+const CREATURE_GLOW_RADIAL_STRENGTH = 2.0;
+const CREATURE_GLOW_RADIAL_FALLOFF = 1.65;
+const CREATURE_VIGNETTE_STRENGTH = 1.0;
+const CREATURE_VIGNETTE_POWER = 1.1;
+const CREATURE_VIGNETTE_ZOOM = 1.5;
+const DEFAULT_SIMULATION_STEP_MS = 1000 / 60;
+const DESKTOP_MAX_SIMULATION_STEPS_PER_FRAME = 3;
+const THROTTLED_MAX_SIMULATION_STEPS_PER_FRAME = 2;
+const MAX_VISIBLE_FRAME_DELTA_MS = 50;
 
 type Vec2 = { x: number; y: number };
 const V = {
@@ -82,6 +101,11 @@ const V = {
 };
 
 const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
+const wrapCoord = (value: number, size: number) => {
+  if (value < 0) return value + size;
+  if (value >= size) return value - size;
+  return value;
+};
 const smoothstep = (edge0: number, edge1: number, x: number) => {
   const t = clamp((x - edge0) / Math.max(1e-6, edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
@@ -137,6 +161,7 @@ type Skeleton = {
 
 type Boid = {
   p: Vec2;
+  prevP: Vec2;
   v: Vec2;
   a: Vec2;
   s: number;
@@ -176,6 +201,27 @@ type HeadConfig = {
   attractToHead: number;
   followHeadVel: number;
   headDist: number;
+};
+
+type SpeciesFrameBuffers = {
+  centerOfMass: Vec2[];
+  counts: number[];
+  normalizedVelocity: Vec2[];
+  sumPos: Vec2[];
+  sumVel: Vec2[];
+};
+
+type SpeciesStepBuffers = {
+  globalCohesion: number[];
+  globalMergeRadius: number[];
+  globalVelFollow: number[];
+  maxForce: number[];
+  maxSpeedBase: number[];
+  neighborRadiusSq: number[];
+  wAlign: number[];
+  wCoh: number[];
+  wMouse: number[];
+  wSep: number[];
 };
 
 type SpeciesConfig = {
@@ -371,6 +417,7 @@ type BoidsProps = {
   runtimeProfile?: CanvasRuntimeProfile;
   sourceCanvasRef?: MutableRefObject<HTMLCanvasElement | null>;
   studioSettings?: BoidsStudioSettings;
+  visibilityRefExternal?: MutableRefObject<number>;
 };
 
 const createEffectivePreset = (studioSettings?: BoidsStudioSettings): Preset => {
@@ -397,6 +444,14 @@ const createEffectivePreset = (studioSettings?: BoidsStudioSettings): Preset => 
   };
 };
 
+const normalizeSpecies = (preset: Preset): SpeciesConfig[] => {
+  const sum = preset.species.reduce((acc, species) => acc + species.ratio, 0) || 1;
+  return preset.species.map((species) => ({
+    ...species,
+    ratio: species.ratio / sum,
+  }));
+};
+
 export default function Boids({
   className,
   disperse = 0,
@@ -406,6 +461,7 @@ export default function Boids({
   runtimeProfile = DESKTOP_CANVAS_RUNTIME,
   sourceCanvasRef,
   studioSettings,
+  visibilityRefExternal,
 }: BoidsProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -416,16 +472,50 @@ export default function Boids({
   const internalDisperseRef = useRef(disperse);
   internalDisperseRef.current = disperse;
   const effectiveDisperseRef = disperseValueRef ?? internalDisperseRef;
+  const internalVisibilityRef = useRef(1);
+  const effectiveVisibilityRef =
+    visibilityRefExternal ?? internalVisibilityRef;
 
   const presetRef = useRef<Preset>(createEffectivePreset(studioSettings));
   presetRef.current = createEffectivePreset(studioSettings);
+  const normalizedSpeciesRef = useRef<SpeciesConfig[]>(
+    normalizeSpecies(presetRef.current)
+  );
+  normalizedSpeciesRef.current = normalizeSpecies(presetRef.current);
 
   const boidsRuntime = runtimeProfile.boids;
 
   const boidsRef = useRef<Boid[]>([]);
+  const interactionBoundsRef = useRef({
+    height: 1,
+    left: 0,
+    top: 0,
+    width: 1,
+  });
   const mouseRef = useRef<Vec2 | null>(null);
   const runningRef = useRef(true);
-  const gridRef = useRef<Map<string, number[]>>(new Map());
+  const gridRef = useRef<Map<number, number[]>>(new Map());
+  const gridActiveKeysRef = useRef<number[]>([]);
+  const gridBucketPoolRef = useRef<number[][]>([]);
+  const speciesFrameBuffersRef = useRef<SpeciesFrameBuffers>({
+    centerOfMass: [],
+    counts: [],
+    normalizedVelocity: [],
+    sumPos: [],
+    sumVel: [],
+  });
+  const speciesStepBuffersRef = useRef<SpeciesStepBuffers>({
+    globalCohesion: [],
+    globalMergeRadius: [],
+    globalVelFollow: [],
+    maxForce: [],
+    maxSpeedBase: [],
+    neighborRadiusSq: [],
+    wAlign: [],
+    wCoh: [],
+    wMouse: [],
+    wSep: [],
+  });
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   const skeletonRef = useRef<Skeleton | null>(null);
 
@@ -477,30 +567,6 @@ export default function Boids({
     return program;
   };
 
-  const speedToRgb = (speed: number, minSpeed: number, maxSpeed: number) => {
-    const t = clamp((speed - minSpeed) / Math.max(1e-6, maxSpeed - minSpeed), 0, 1);
-  
-    const shaped = Math.pow(t, 3.8);
-  
-    let r: number;
-    let g: number;
-    let b: number;
-  
-    if (shaped < 0.5) {
-      const u = shaped / 0.5;
-      r = 0;
-      g = Math.round(255 * u);
-      b = 255;
-    } else {
-      const u = (shaped - 0.5) / 0.5;
-      r = 255;
-      g = Math.round(255 * (1 - u));
-      b = Math.round(255 * (1 - u));
-    }
-  
-    return { r, g, b };
-  };
-
   const toroidalDelta = (from: Vec2, to: Vec2, W: number, H: number): Vec2 => {
     let dx = to.x - from.x;
     if (dx > W * 0.5) dx -= W;
@@ -511,11 +577,6 @@ export default function Boids({
     else if (dy < -H * 0.5) dy += H;
 
     return { x: dx, y: dy };
-  };
-
-  const normalizeSpecies = (preset: Preset): SpeciesConfig[] => {
-    const sum = preset.species.reduce((acc, s) => acc + s.ratio, 0) || 1;
-    return preset.species.map((s) => ({ ...s, ratio: s.ratio / sum }));
   };
 
   const initSkeleton = () => {
@@ -562,14 +623,69 @@ export default function Boids({
     };
   };
 
+  const ensureSpeciesFrameBuffers = (speciesCount: number) => {
+    const buffers = speciesFrameBuffersRef.current;
+    const ensureVectorArray = (array: Vec2[]) => {
+      while (array.length < speciesCount) {
+        array.push({ x: 0, y: 0 });
+      }
+      array.length = speciesCount;
+    };
+
+    ensureVectorArray(buffers.centerOfMass);
+    ensureVectorArray(buffers.normalizedVelocity);
+    ensureVectorArray(buffers.sumPos);
+    ensureVectorArray(buffers.sumVel);
+
+    while (buffers.counts.length < speciesCount) {
+      buffers.counts.push(0);
+    }
+    buffers.counts.length = speciesCount;
+  };
+
+  const ensureSpeciesStepBuffers = (speciesCount: number) => {
+    const buffers = speciesStepBuffersRef.current;
+    const ensureNumberArray = (array: number[]) => {
+      while (array.length < speciesCount) {
+        array.push(0);
+      }
+      array.length = speciesCount;
+    };
+
+    ensureNumberArray(buffers.globalCohesion);
+    ensureNumberArray(buffers.globalMergeRadius);
+    ensureNumberArray(buffers.globalVelFollow);
+    ensureNumberArray(buffers.maxForce);
+    ensureNumberArray(buffers.maxSpeedBase);
+    ensureNumberArray(buffers.neighborRadiusSq);
+    ensureNumberArray(buffers.wAlign);
+    ensureNumberArray(buffers.wCoh);
+    ensureNumberArray(buffers.wMouse);
+    ensureNumberArray(buffers.wSep);
+  };
+
   const rebuildGrid = (neighborDist: number) => {
     const grid = gridRef.current;
+    const activeKeys = gridActiveKeysRef.current;
+    const bucketPool = gridBucketPoolRef.current;
+    for (let i = 0; i < activeKeys.length; i++) {
+      const bucket = grid.get(activeKeys[i]);
+      if (bucket) {
+        bucket.length = 0;
+        bucketPool.push(bucket);
+      }
+    }
+    activeKeys.length = 0;
     grid.clear();
 
     const { w, h } = sizeRef.current;
     const cell = Math.max(8, neighborDist);
+    const cols = Math.max(1, Math.ceil(w / cell));
+    const rows = Math.max(1, Math.ceil(h / cell));
+    const boids = boidsRef.current;
 
-    boidsRef.current.forEach((b, idx) => {
+    for (let idx = 0; idx < boids.length; idx++) {
+      const b = boids[idx];
       let x = b.p.x;
       let y = b.p.y;
       if (x < 0) x += w;
@@ -577,13 +693,21 @@ export default function Boids({
       if (y < 0) y += h;
       if (y >= h) y -= h;
 
-      const k = `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
-      const arr = grid.get(k);
-      if (arr) arr.push(idx);
-      else grid.set(k, [idx]);
-    });
+      const cellX = Math.min(cols - 1, Math.max(0, Math.floor(x / cell)));
+      const cellY = Math.min(rows - 1, Math.max(0, Math.floor(y / cell)));
+      const key = cellX + cellY * cols;
+      let bucket = grid.get(key);
 
-    return { cell };
+      if (!bucket) {
+        bucket = bucketPool.pop() ?? [];
+        grid.set(key, bucket);
+        activeKeys.push(key);
+      }
+
+      bucket.push(idx);
+    }
+
+    return { cell, cols, rows };
   };
 
   const rebuildAnchors = (sk: Skeleton, W: number, H: number) => {
@@ -946,7 +1070,7 @@ export default function Boids({
       120,
       Math.round(COUNTS[countIndex] * boidsRuntime.countMultiplier)
     );
-    const speciesList = normalizeSpecies(presetRef.current);
+    const speciesList = normalizedSpeciesRef.current;
     const sk = skeletonRef.current;
 
     const counts: number[] = [];
@@ -998,6 +1122,7 @@ export default function Boids({
 
         const boid: Boid = {
           p: { x, y },
+          prevP: { x, y },
           v: { x: rand(-1, 1), y: rand(-1, 1) },
           a: { x: 0, y: 0 },
           s,
@@ -1046,7 +1171,7 @@ export default function Boids({
     }
   };
 
-  const stepBoids = () => {
+  const stepBoids = (profilerEnabled: boolean) => {
     const { w, h } = sizeRef.current;
     const base = presetRef.current;
     const boids = boidsRef.current;
@@ -1082,16 +1207,74 @@ export default function Boids({
       homeWeight,
     } = base;
 
-    const speciesList = normalizeSpecies(base);
+    const speciesList = normalizedSpeciesRef.current;
     const speciesCount = speciesList.length;
+    const centerX = w * 0.5;
+    const centerY = h * 0.5;
+    const halfW = w * 0.5;
+    const halfH = h * 0.5;
+    const maxDimension = Math.max(w, h);
     const R0 = R1 * mouseCoreFactor;
     const R2 = R1 * mouseOuterFactor;
+    const R0Sq = R0 * R0;
+    const R1Sq = R1 * R1;
+    const R2Sq = R2 * R2;
+    const mouseR1SpanInv = 1 / Math.max(1e-6, R1 - R0);
+    const mouseR2SpanInv = 1 / Math.max(1e-6, R2 - R1);
     const maxNeighborDist = neighborDist * disperseNeighborBoost;
-    const { cell } = rebuildGrid(maxNeighborDist);
+    const desiredSeparationEff = desiredSeparation * desiredSeparationBoost;
+    const desiredSeparationEffSq = desiredSeparationEff * desiredSeparationEff;
+    const gridStartedAt = profilerEnabled ? performance.now() : 0;
+    const { cell, cols, rows } = rebuildGrid(maxNeighborDist);
+    const currentTimeSeconds = performance.now() * 0.001;
+    if (profilerEnabled) {
+      recordRuntimeMetric("boids.grid", performance.now() - gridStartedAt);
+    }
 
-    const sumPos: Vec2[] = Array.from({ length: speciesCount }, () => ({ x: 0, y: 0 }));
-    const sumVel: Vec2[] = Array.from({ length: speciesCount }, () => ({ x: 0, y: 0 }));
-    const cnt: number[] = Array.from({ length: speciesCount }, () => 0);
+    ensureSpeciesFrameBuffers(speciesCount);
+    ensureSpeciesStepBuffers(speciesCount);
+    const {
+      centerOfMass,
+      counts,
+      normalizedVelocity,
+      sumPos,
+      sumVel,
+    } = speciesFrameBuffersRef.current;
+    const {
+      globalCohesion,
+      globalMergeRadius,
+      globalVelFollow,
+      maxForce: maxForceBySpecies,
+      maxSpeedBase,
+      neighborRadiusSq,
+      wAlign: wAlignBySpecies,
+      wCoh: wCohBySpecies,
+      wMouse: wMouseBySpecies,
+      wSep: wSepBySpecies,
+    } = speciesStepBuffersRef.current;
+    const aggregateStartedAt = profilerEnabled ? performance.now() : 0;
+
+    for (let i = 0; i < speciesCount; i++) {
+      sumPos[i].x = 0;
+      sumPos[i].y = 0;
+      sumVel[i].x = 0;
+      sumVel[i].y = 0;
+      counts[i] = 0;
+
+      const sc = speciesList[i];
+      const neighborRadius =
+        neighborDist * (sc.neighborDistScale ?? 1) * disperseNeighborBoost;
+      neighborRadiusSq[i] = neighborRadius * neighborRadius;
+      maxSpeedBase[i] = maxSpeed * (sc.maxSpeedScale ?? 1);
+      maxForceBySpecies[i] = maxForce * (sc.maxForceScale ?? 1);
+      wAlignBySpecies[i] = wAlign * (sc.wAlignScale ?? 1);
+      wCohBySpecies[i] = wCoh * (sc.wCohScale ?? 1);
+      wSepBySpecies[i] = wSep * (sc.wSepScale ?? 1);
+      wMouseBySpecies[i] = wMouse * (sc.wMouseScale ?? 1);
+      globalCohesion[i] = sc.globalCohesion ?? 0;
+      globalVelFollow[i] = sc.globalVelFollow ?? 0;
+      globalMergeRadius[i] = sc.globalMergeRadius ?? 0;
+    }
 
     for (let i = 0; i < boids.length; i++) {
       const b = boids[i];
@@ -1099,45 +1282,64 @@ export default function Boids({
       sumPos[b.s].y += b.p.y;
       sumVel[b.s].x += b.v.x;
       sumVel[b.s].y += b.v.y;
-      cnt[b.s]++;
+      counts[b.s]++;
     }
 
-    const COM: Vec2[] = sumPos.map((s, si) => ({
-      x: cnt[si] ? s.x / cnt[si] : 0,
-      y: cnt[si] ? s.y / cnt[si] : 0,
-    }));
+    for (let i = 0; i < speciesCount; i++) {
+      const count = counts[i];
+      const com = centerOfMass[i];
+      const vel = normalizedVelocity[i];
 
-    const VEL: Vec2[] = sumVel.map((s, si) => {
-      const c = cnt[si] || 1;
-      const vx = s.x / c;
-      const vy = s.y / c;
-      const m = Math.hypot(vx, vy) || 1;
-      return { x: vx / m, y: vy / m };
-    });
+      if (count > 0) {
+        com.x = sumPos[i].x / count;
+        com.y = sumPos[i].y / count;
+      } else {
+        com.x = 0;
+        com.y = 0;
+      }
+
+      const vx = sumVel[i].x / Math.max(1, count);
+      const vy = sumVel[i].y / Math.max(1, count);
+      const magnitude = Math.hypot(vx, vy) || 1;
+      vel.x = vx / magnitude;
+      vel.y = vy / magnitude;
+    }
+    if (profilerEnabled) {
+      recordRuntimeMetric(
+        "boids.aggregate",
+        performance.now() - aggregateStartedAt
+      );
+    }
 
     const mouse = mouseRef.current;
     const mode = mouseModeRef.current;
-    const center: Vec2 = { x: w * 0.5, y: h * 0.5 };
     const grid = gridRef.current;
     const sk = skeletonRef.current;
+    const flockStartedAt = profilerEnabled ? performance.now() : 0;
 
     for (let i = 0; i < boids.length; i++) {
       const b = boids[i];
-      const sc = speciesList[b.s];
-      const nScale = sc.neighborDistScale ?? 1;
-      const neighR = neighborDist * nScale * disperseNeighborBoost;
-      const neighR2 = neighR * neighR;
-      const desiredSeparationEff = desiredSeparation * desiredSeparationBoost;
+      const speciesIndex = b.s;
+      const sc = speciesList[speciesIndex];
+      const bp = b.p;
+      const bpx = bp.x;
+      const bpy = bp.y;
+      let bvx = b.v.x;
+      let bvy = b.v.y;
+      let ax = 0;
+      let ay = 0;
 
-      const maxSpeedEff = maxSpeed * (sc.maxSpeedScale ?? 1) * b.speedScale;
-      const maxForceEff = maxForce * (sc.maxForceScale ?? 1);
-      const wAlignEff = wAlign * (sc.wAlignScale ?? 1);
-      const wCohEff = wCoh * (sc.wCohScale ?? 1);
-      const wSepEff = wSep * (sc.wSepScale ?? 1);
-      const wMouseEff = wMouse * (sc.wMouseScale ?? 1);
-
-      b.a.x = 0;
-      b.a.y = 0;
+      const neighR2 = neighborRadiusSq[speciesIndex];
+      const maxSpeedEff = maxSpeedBase[speciesIndex] * b.speedScale;
+      const maxSpeedEffSq = maxSpeedEff * maxSpeedEff;
+      const maxForceEff = maxForceBySpecies[speciesIndex];
+      const maxForceEffSq = maxForceEff * maxForceEff;
+      const wAlignEff = wAlignBySpecies[speciesIndex];
+      const wCohEff = wCohBySpecies[speciesIndex];
+      const wSepEff = wSepBySpecies[speciesIndex];
+      const wMouseEff = wMouseBySpecies[speciesIndex];
+      const sepLimit = maxForceEff * sepForceBoost;
+      const sepLimitSq = sepLimit * sepLimit;
 
       let inR0 = false;
       let inR1 = false;
@@ -1148,12 +1350,12 @@ export default function Boids({
       let d2 = 0;
 
       if (mouse) {
-        const dx = mouse.x - b.p.x;
-        const dy = mouse.y - b.p.y;
+        const dx = mouse.x - bpx;
+        const dy = mouse.y - bpy;
         d2 = dx * dx + dy * dy;
-        inR0 = d2 < R0 * R0;
-        inR1 = !inR0 && d2 < R1 * R1;
-        inR2 = !inR1 && d2 < R2 * R2;
+        inR0 = d2 < R0Sq;
+        inR1 = !inR0 && d2 < R1Sq;
+        inR2 = !inR1 && d2 < R2Sq;
         if (inR0 || inR1 || inR2) {
           d = Math.sqrt(d2) || 1e-6;
           nx = dx / d;
@@ -1161,45 +1363,53 @@ export default function Boids({
         }
       }
 
-      const cx = Math.floor(b.p.x / cell);
-      const cy = Math.floor(b.p.y / cell);
+      const cx = Math.floor(bpx / cell);
+      const cy = Math.floor(bpy / cell);
 
       let countSame = 0;
       let countNearby = 0;
-      const align: Vec2 = { x: 0, y: 0 };
-      const coh: Vec2 = { x: 0, y: 0 };
-      const sep: Vec2 = { x: 0, y: 0 };
+      let alignX = 0;
+      let alignY = 0;
+      let cohX = 0;
+      let cohY = 0;
+      let sepX = 0;
+      let sepY = 0;
 
       for (let ox = -1; ox <= 1; ox++) {
         for (let oy = -1; oy <= 1; oy++) {
-          const k = `${cx + ox},${cy + oy}`;
+          const gridX = cx + ox;
+          const gridY = cy + oy;
+          if (gridX < 0 || gridY < 0 || gridX >= cols || gridY >= rows) {
+            continue;
+          }
+          const k = gridX + gridY * cols;
           const list = grid.get(k);
           if (!list) continue;
 
-          for (const idx of list) {
+          for (let listIndex = 0; listIndex < list.length; listIndex++) {
+            const idx = list[listIndex];
             if (idx === i) continue;
             const o = boids[idx];
-            const dx = o.p.x - b.p.x;
-            const dy = o.p.y - b.p.y;
+            const dx = o.p.x - bpx;
+            const dy = o.p.y - bpy;
             const dd2 = dx * dx + dy * dy;
 
             if (dd2 < neighR2) {
               countNearby++;
 
-              if (dd2 > 0.0001) {
+              if (dd2 > 0.0001 && dd2 < desiredSeparationEffSq) {
                 const dd = Math.sqrt(dd2);
-                const inv = 1 / dd;
-                const push = Math.max(0, desiredSeparationEff - dd) * inv;
-                sep.x -= dx * push;
-                sep.y -= dy * push;
+                const push = (desiredSeparationEff - dd) / dd;
+                sepX -= dx * push;
+                sepY -= dy * push;
               }
 
-              if (o.s === b.s) {
+              if (o.s === speciesIndex) {
                 countSame++;
-                align.x += o.v.x;
-                align.y += o.v.y;
-                coh.x += o.p.x;
-                coh.y += o.p.y;
+                alignX += o.v.x;
+                alignY += o.v.y;
+                cohX += o.p.x;
+                cohY += o.p.y;
               }
             }
           }
@@ -1209,36 +1419,57 @@ export default function Boids({
       if (countSame > 0) {
         const flockScale = inR1 || inR0 ? localFlockDampen : 1.0;
         const flockHoldEff = flockScale * flockHold;
+        const invCountSame = 1 / countSame;
 
-        align.x /= countSame;
-        align.y /= countSame;
-        V.setMag(align, maxSpeedEff);
-        align.x -= b.v.x;
-        align.y -= b.v.y;
-        V.limit(align, maxForceEff);
-        align.x *= wAlignEff * flockHoldEff;
-        align.y *= wAlignEff * flockHoldEff;
+        let steerX = alignX * invCountSame;
+        let steerY = alignY * invCountSame;
+        let magSq = steerX * steerX + steerY * steerY;
+        if (magSq > 1e-12) {
+          const scale = maxSpeedEff / Math.sqrt(magSq);
+          steerX *= scale;
+          steerY *= scale;
+        }
+        steerX -= bvx;
+        steerY -= bvy;
+        magSq = steerX * steerX + steerY * steerY;
+        if (magSq > maxForceEffSq) {
+          const scale = maxForceEff / Math.sqrt(magSq);
+          steerX *= scale;
+          steerY *= scale;
+        }
+        ax += steerX * wAlignEff * flockHoldEff;
+        ay += steerY * wAlignEff * flockHoldEff;
 
-        coh.x /= countSame;
-        coh.y /= countSame;
-        const toCenter = V.subNew(coh, b.p);
-        V.setMag(toCenter, maxSpeedEff);
-        toCenter.x -= b.v.x;
-        toCenter.y -= b.v.y;
-        V.limit(toCenter, maxForceEff);
-        toCenter.x *= wCohEff * flockHoldEff;
-        toCenter.y *= wCohEff * flockHoldEff;
-
-        V.add(b.a, align);
-        V.add(b.a, toCenter);
+        steerX = cohX * invCountSame - bpx;
+        steerY = cohY * invCountSame - bpy;
+        magSq = steerX * steerX + steerY * steerY;
+        if (magSq > 1e-12) {
+          const scale = maxSpeedEff / Math.sqrt(magSq);
+          steerX *= scale;
+          steerY *= scale;
+        }
+        steerX -= bvx;
+        steerY -= bvy;
+        magSq = steerX * steerX + steerY * steerY;
+        if (magSq > maxForceEffSq) {
+          const scale = maxForceEff / Math.sqrt(magSq);
+          steerX *= scale;
+          steerY *= scale;
+        }
+        ax += steerX * wCohEff * flockHoldEff;
+        ay += steerY * wCohEff * flockHoldEff;
       }
 
       if (countNearby > 0) {
         const sepScale = inR1 || inR0 ? sepBoostR1 : 1.0;
-        V.limit(sep, maxForceEff * sepForceBoost);
-        sep.x *= wSepEff * sepScale * sepWeightBoost;
-        sep.y *= wSepEff * sepScale * sepWeightBoost;
-        V.add(b.a, sep);
+        const sepMagSq = sepX * sepX + sepY * sepY;
+        if (sepMagSq > sepLimitSq) {
+          const scale = sepLimit / Math.sqrt(sepMagSq);
+          sepX *= scale;
+          sepY *= scale;
+        }
+        ax += sepX * wSepEff * sepScale * sepWeightBoost;
+        ay += sepY * wSepEff * sepScale * sepWeightBoost;
       }
 
       if (sk) {
@@ -1258,45 +1489,92 @@ export default function Boids({
 
           const trail = sc.wing.trailBack ?? 40;
           const jitterAmp = sc.wing.jitter ?? 0;
-          const tNow = performance.now() * 0.001;
-          const jitter = jitterAmp * Math.sin(tNow * 1.5 + i * 0.7);
+          const jitter = jitterAmp * Math.sin(currentTimeSeconds * 1.5 + i * 0.7);
 
           const lateral = (sc.wing.lateralBias ?? 0) * 0.5 * b.side + jitter;
-          const target = {
-            x: anchor.x - tx * trail + px * lateral,
-            y: anchor.y - ty * trail + py * lateral,
-          };
+          const targetX = anchor.x - tx * trail + px * lateral;
+          const targetY = anchor.y - ty * trail + py * lateral;
 
           const leashMin = sc.wing.leashMin ?? 8;
           const leashMax = sc.wing.leashMax ?? 40;
-          const dBA = toroidalDelta(b.p, anchor, w, h);
-          const dist = Math.hypot(dBA.x, dBA.y);
+          let dBAX = anchor.x - bpx;
+          if (dBAX > halfW) dBAX -= w;
+          else if (dBAX < -halfW) dBAX += w;
+          let dBAY = anchor.y - bpy;
+          if (dBAY > halfH) dBAY -= h;
+          else if (dBAY < -halfH) dBAY += h;
+          const dist = Math.hypot(dBAX, dBAY);
 
-          const toT = toroidalDelta(b.p, target, w, h);
-          V.setMag(toT, sc.wing.attractToRibs);
-
-          if (dist > leashMax) {
-            const pullIn = { x: dBA.x, y: dBA.y };
-            V.setMag(pullIn, 0.8 * sc.wing.attractToRibs * Math.min(2, (dist - leashMax) / leashMax + 1));
-            toT.x += pullIn.x;
-            toT.y += pullIn.y;
-          } else if (dist < leashMin) {
-            const pushOut = { x: -dBA.x, y: -dBA.y };
-            V.setMag(pushOut, 0.4 * sc.wing.attractToRibs * (1 - dist / Math.max(1e-6, leashMin)));
-            toT.x += pushOut.x;
-            toT.y += pushOut.y;
+          let steerX = targetX - bpx;
+          if (steerX > halfW) steerX -= w;
+          else if (steerX < -halfW) steerX += w;
+          let steerY = targetY - bpy;
+          if (steerY > halfH) steerY -= h;
+          else if (steerY < -halfH) steerY += h;
+          let magSq = steerX * steerX + steerY * steerY;
+          if (magSq > 1e-12) {
+            const scale = sc.wing.attractToRibs / Math.sqrt(magSq);
+            steerX *= scale;
+            steerY *= scale;
           }
 
-          toT.x += tx * (sc.wing.followRibTangent ?? 0);
-          toT.y += ty * (sc.wing.followRibTangent ?? 0);
+          if (dist > leashMax) {
+            let pullX = dBAX;
+            let pullY = dBAY;
+            magSq = pullX * pullX + pullY * pullY;
+            if (magSq > 1e-12) {
+              const scale =
+                (0.8 *
+                  sc.wing.attractToRibs *
+                  Math.min(2, (dist - leashMax) / leashMax + 1)) /
+                Math.sqrt(magSq);
+              pullX *= scale;
+              pullY *= scale;
+            } else {
+              pullX = 0;
+              pullY = 0;
+            }
+            steerX += pullX;
+            steerY += pullY;
+          } else if (dist < leashMin) {
+            let pushX = -dBAX;
+            let pushY = -dBAY;
+            magSq = pushX * pushX + pushY * pushY;
+            if (magSq > 1e-12) {
+              const scale =
+                (0.4 *
+                  sc.wing.attractToRibs *
+                  (1 - dist / Math.max(1e-6, leashMin))) /
+                Math.sqrt(magSq);
+              pushX *= scale;
+              pushY *= scale;
+            } else {
+              pushX = 0;
+              pushY = 0;
+            }
+            steerX += pushX;
+            steerY += pushY;
+          }
 
-          V.setMag(toT, maxSpeedEff);
-          toT.x -= b.v.x;
-          toT.y -= b.v.y;
-          V.limit(toT, maxForceEff);
-          toT.x *= structureHold;
-          toT.y *= structureHold;
-          V.add(b.a, toT);
+          steerX += tx * (sc.wing.followRibTangent ?? 0);
+          steerY += ty * (sc.wing.followRibTangent ?? 0);
+
+          magSq = steerX * steerX + steerY * steerY;
+          if (magSq > 1e-12) {
+            const scale = maxSpeedEff / Math.sqrt(magSq);
+            steerX *= scale;
+            steerY *= scale;
+          }
+          steerX -= bvx;
+          steerY -= bvy;
+          magSq = steerX * steerX + steerY * steerY;
+          if (magSq > maxForceEffSq) {
+            const scale = maxForceEff / Math.sqrt(magSq);
+            steerX *= scale;
+            steerY *= scale;
+          }
+          ax += steerX * structureHold;
+          ay += steerY * structureHold;
         }
 
         if (sc.id === "bone" && sc.bone && sk.boneAnchors.length > 0) {
@@ -1314,62 +1592,105 @@ export default function Boids({
 
           const anchor = anchors[b.anchorIdx];
           const tan = tangents[b.anchorIdx];
-          const dBA = toroidalDelta(b.p, anchor, w, h);
-          const dist = Math.hypot(dBA.x, dBA.y);
+          let dBAX = anchor.x - bpx;
+          if (dBAX > halfW) dBAX -= w;
+          else if (dBAX < -halfW) dBAX += w;
+          let dBAY = anchor.y - bpy;
+          if (dBAY > halfH) dBAY -= h;
+          else if (dBAY < -halfH) dBAY += h;
+          const dist = Math.hypot(dBAX, dBAY);
 
           const leashMin = sc.bone.leashMin ?? 8;
           const leashMax = sc.bone.leashMax ?? 28;
           const anchorAttract = sc.bone.anchorAttract ?? 4.0;
           const anchorFollow = sc.bone.anchorFollow ?? 1.0;
 
-          let radial = { x: dBA.x, y: dBA.y };
+          let radialX = dBAX;
+          let radialY = dBAY;
           let radialScale = anchorAttract;
 
           if (dist > leashMax) {
             radialScale *= 1.5 + (dist - leashMax) / leashMax;
           } else if (dist < leashMin) {
-            radial.x = -radial.x;
-            radial.y = -radial.y;
+            radialX = -radialX;
+            radialY = -radialY;
             radialScale *= 0.4 * (1 - dist / Math.max(1e-6, leashMin));
           }
 
-          V.setMag(radial, radialScale);
+          let magSq = radialX * radialX + radialY * radialY;
+          if (magSq > 1e-12) {
+            const scale = radialScale / Math.sqrt(magSq);
+            radialX *= scale;
+            radialY *= scale;
+          } else {
+            radialX = 0;
+            radialY = 0;
+          }
 
           const tm = Math.hypot(tan.x, tan.y) || 1e-6;
           const tx = tan.x / tm;
           const ty = tan.y / tm;
-          const tangentPull: Vec2 = { x: tx * anchorFollow, y: ty * anchorFollow };
+          let steerX = radialX + tx * anchorFollow;
+          let steerY = radialY + ty * anchorFollow;
 
-          const desire = { x: radial.x + tangentPull.x, y: radial.y + tangentPull.y };
-          V.setMag(desire, maxSpeedEff);
-          desire.x -= b.v.x;
-          desire.y -= b.v.y;
-          V.limit(desire, maxForceEff);
-          desire.x *= structureHold;
-          desire.y *= structureHold;
-          V.add(b.a, desire);
+          magSq = steerX * steerX + steerY * steerY;
+          if (magSq > 1e-12) {
+            const scale = maxSpeedEff / Math.sqrt(magSq);
+            steerX *= scale;
+            steerY *= scale;
+          }
+          steerX -= bvx;
+          steerY -= bvy;
+          magSq = steerX * steerX + steerY * steerY;
+          if (magSq > maxForceEffSq) {
+            const scale = maxForceEff / Math.sqrt(magSq);
+            steerX *= scale;
+            steerY *= scale;
+          }
+          ax += steerX * structureHold;
+          ay += steerY * structureHold;
         }
 
         if (sc.head) {
-          const dBH = toroidalDelta(b.p, sk.headPos, w, h);
-          const d2h = dBH.x * dBH.x + dBH.y * dBH.y;
+          let dBHX = sk.headPos.x - bpx;
+          if (dBHX > halfW) dBHX -= w;
+          else if (dBHX < -halfW) dBHX += w;
+          let dBHY = sk.headPos.y - bpy;
+          if (dBHY > halfH) dBHY -= h;
+          else if (dBHY < -halfH) dBHY += h;
+          const d2h = dBHX * dBHX + dBHY * dBHY;
           if (d2h < sc.head.headDist * sc.head.headDist) {
             const vMag = Math.hypot(sk.headVel.x, sk.headVel.y) || 1e-6;
             const vx = sk.headVel.x / vMag;
             const vy = sk.headVel.y / vMag;
 
-            const desire: Vec2 = { x: dBH.x, y: dBH.y };
-            V.setMag(desire, sc.head.attractToHead);
-            desire.x += vx * sc.head.followHeadVel;
-            desire.y += vy * sc.head.followHeadVel;
+            let steerX = dBHX;
+            let steerY = dBHY;
+            let magSq = steerX * steerX + steerY * steerY;
+            if (magSq > 1e-12) {
+              const scale = sc.head.attractToHead / Math.sqrt(magSq);
+              steerX *= scale;
+              steerY *= scale;
+            }
+            steerX += vx * sc.head.followHeadVel;
+            steerY += vy * sc.head.followHeadVel;
 
-            V.setMag(desire, maxSpeedEff);
-            desire.x -= b.v.x;
-            desire.y -= b.v.y;
-            V.limit(desire, maxForceEff);
-            desire.x *= structureHold;
-            desire.y *= structureHold;
-            V.add(b.a, desire);
+            magSq = steerX * steerX + steerY * steerY;
+            if (magSq > 1e-12) {
+              const scale = maxSpeedEff / Math.sqrt(magSq);
+              steerX *= scale;
+              steerY *= scale;
+            }
+            steerX -= bvx;
+            steerY -= bvy;
+            magSq = steerX * steerX + steerY * steerY;
+            if (magSq > maxForceEffSq) {
+              const scale = maxForceEff / Math.sqrt(magSq);
+              steerX *= scale;
+              steerY *= scale;
+            }
+            ax += steerX * structureHold;
+            ay += steerY * structureHold;
           }
         }
       }
@@ -1379,137 +1700,199 @@ export default function Boids({
           if (inR0) {
             const invSq = Math.min(1, (R0 * R0) / (d2 + 1));
             const forceMag = maxForceEff * wMouseEff * mouseCoreRepelMult * invSq;
-            b.a.x -= nx * forceMag;
-            b.a.y -= ny * forceMag;
+            ax -= nx * forceMag;
+            ay -= ny * forceMag;
           } else if (inR1) {
-            const t = (d - R0) / Math.max(1e-6, R1 - R0);
+            const t = (d - R0) * mouseR1SpanInv;
             const invSq = Math.min(1, (R1 * R1) / (d2 + 1));
             const forceMag = maxForceEff * wMouseEff * seekAttractMult * invSq * t;
-            b.a.x += nx * forceMag;
-            b.a.y += ny * forceMag;
+            ax += nx * forceMag;
+            ay += ny * forceMag;
 
-            const impulse = seekBoost * t * (1 - (d - R0) / Math.max(1e-6, R1 - R0));
-            b.v.x += nx * Math.max(0, impulse);
-            b.v.y += ny * Math.max(0, impulse);
+            const impulse = Math.max(0, seekBoost * t * (1 - t));
+            bvx += nx * impulse;
+            bvy += ny * impulse;
 
-            const vr = b.v.x * nx + b.v.y * ny;
-            b.a.x -= nx * vr * seekDamping;
-            b.a.y -= ny * vr * seekDamping;
+            const vr = bvx * nx + bvy * ny;
+            ax -= nx * vr * seekDamping;
+            ay -= ny * vr * seekDamping;
           } else if (inR2) {
-            const t = (d - R1) / Math.max(1e-6, R2 - R1);
+            const t = (d - R1) * mouseR2SpanInv;
             const wLocal = (1 - t) * 0.5;
-            const desired = { x: nx, y: ny };
-            V.setMag(desired, maxSpeedEff);
-            desired.x -= b.v.x;
-            desired.y -= b.v.y;
-            V.limit(desired, maxForceEff * 0.8);
-            desired.x *= wMouseEff * wLocal;
-            desired.y *= wMouseEff * wLocal;
-            V.add(b.a, desired);
+            let steerX = nx * maxSpeedEff - bvx;
+            let steerY = ny * maxSpeedEff - bvy;
+            const outerMaxForce = maxForceEff * 0.8;
+            const outerMaxForceSq = outerMaxForce * outerMaxForce;
+            const magSq = steerX * steerX + steerY * steerY;
+            if (magSq > outerMaxForceSq) {
+              const scale = outerMaxForce / Math.sqrt(magSq);
+              steerX *= scale;
+              steerY *= scale;
+            }
+            ax += steerX * wMouseEff * wLocal;
+            ay += steerY * wMouseEff * wLocal;
           }
         } else {
           if (inR1 || inR0) {
             const R = inR0 ? R0 : R1;
             const invSq = Math.min(1, (R * R) / (d2 + 1));
             const forceMag = maxForceEff * wMouseEff * mouseFleeMult * invSq;
-            b.a.x -= nx * forceMag;
-            b.a.y -= ny * forceMag;
+            ax -= nx * forceMag;
+            ay -= ny * forceMag;
 
             const impulse = mouseBoost * (1 - d / R);
-            b.v.x -= nx * Math.max(0, impulse);
-            b.v.y -= ny * Math.max(0, impulse);
+            const impulseClamped = Math.max(0, impulse);
+            bvx -= nx * impulseClamped;
+            bvy -= ny * impulseClamped;
           } else if (inR2) {
-            const t = (d - R1) / Math.max(1e-6, R2 - R1);
+            const t = (d - R1) * mouseR2SpanInv;
             const wLocal = (1 - t) * 0.4;
-            const desired = { x: -nx, y: -ny };
-            V.setMag(desired, maxSpeedEff);
-            desired.x -= b.v.x;
-            desired.y -= b.v.y;
-            V.limit(desired, maxForceEff * 0.8);
-            desired.x *= wMouseEff * wLocal;
-            desired.y *= wMouseEff * wLocal;
-            V.add(b.a, desired);
+            let steerX = -nx * maxSpeedEff - bvx;
+            let steerY = -ny * maxSpeedEff - bvy;
+            const outerMaxForce = maxForceEff * 0.8;
+            const outerMaxForceSq = outerMaxForce * outerMaxForce;
+            const magSq = steerX * steerX + steerY * steerY;
+            if (magSq > outerMaxForceSq) {
+              const scale = outerMaxForce / Math.sqrt(magSq);
+              steerX *= scale;
+              steerY *= scale;
+            }
+            ax += steerX * wMouseEff * wLocal;
+            ay += steerY * wMouseEff * wLocal;
           }
         }
       }
 
       {
-        const com = COM[b.s];
-        const velN = VEL[b.s];
-        const gc = (sc.globalCohesion ?? 0) * flockHold;
-        const gv = (sc.globalVelFollow ?? 0) * flockHold;
-        const mergeR = sc.globalMergeRadius ?? 0;
+        const com = centerOfMass[speciesIndex];
+        const velN = normalizedVelocity[speciesIndex];
+        const gc = globalCohesion[speciesIndex] * flockHold;
+        const gv = globalVelFollow[speciesIndex] * flockHold;
+        const mergeR = globalMergeRadius[speciesIndex];
 
         if (gc > 0 || gv > 0) {
-          const toCom = V.subNew(com, b.p);
-          const distCom = V.mag(toCom);
+          const toComX = com.x - bpx;
+          const toComY = com.y - bpy;
+          const distCom = Math.hypot(toComX, toComY);
           if (!mergeR || distCom > mergeR) {
-            const outer = mergeR > 0 ? mergeR * 2 : Math.max(w, h);
+            const outer = mergeR > 0 ? mergeR * 2 : maxDimension;
             const tt = Math.min(1, Math.max(0, (distCom - mergeR) / Math.max(1e-6, outer - mergeR)));
 
             if (gc > 0) {
-              const pull = { x: toCom.x, y: toCom.y };
-              V.setMag(pull, maxSpeedEff * 0.5);
-              pull.x -= b.v.x;
-              pull.y -= b.v.y;
-              V.limit(pull, maxForceEff);
-              pull.x *= gc * tt;
-              pull.y *= gc * tt;
-              V.add(b.a, pull);
+              let pullX = toComX;
+              let pullY = toComY;
+              let magSq = pullX * pullX + pullY * pullY;
+              if (magSq > 1e-12) {
+                const scale = (maxSpeedEff * 0.5) / Math.sqrt(magSq);
+                pullX *= scale;
+                pullY *= scale;
+              }
+              pullX -= bvx;
+              pullY -= bvy;
+              magSq = pullX * pullX + pullY * pullY;
+              if (magSq > maxForceEffSq) {
+                const scale = maxForceEff / Math.sqrt(magSq);
+                pullX *= scale;
+                pullY *= scale;
+              }
+              ax += pullX * gc * tt;
+              ay += pullY * gc * tt;
             }
 
             if (gv > 0) {
-              const velPull = {
-                x: velN.x * maxSpeedEff - b.v.x,
-                y: velN.y * maxSpeedEff - b.v.y,
-              };
-              V.limit(velPull, maxForceEff * 0.6);
-              velPull.x *= gv * tt;
-              velPull.y *= gv * tt;
-              V.add(b.a, velPull);
+              let pullX = velN.x * maxSpeedEff - bvx;
+              let pullY = velN.y * maxSpeedEff - bvy;
+              const velLimit = maxForceEff * 0.6;
+              const velLimitSq = velLimit * velLimit;
+              const magSq = pullX * pullX + pullY * pullY;
+              if (magSq > velLimitSq) {
+                const scale = velLimit / Math.sqrt(magSq);
+                pullX *= scale;
+                pullY *= scale;
+              }
+              ax += pullX * gv * tt;
+              ay += pullY * gv * tt;
             }
           }
         }
       }
 
       {
-        const toCtr = V.subNew(center, b.p);
-        V.setMag(toCtr, maxSpeedEff * 0.15);
-        toCtr.x -= b.v.x;
-        toCtr.y -= b.v.y;
-        V.limit(toCtr, maxForceEff * 0.6);
-        toCtr.x *= homeWeight * homeHold;
-        toCtr.y *= homeWeight * homeHold;
-        V.add(b.a, toCtr);
+        let steerX = centerX - bpx;
+        let steerY = centerY - bpy;
+        let magSq = steerX * steerX + steerY * steerY;
+        if (magSq > 1e-12) {
+          const scale = (maxSpeedEff * 0.15) / Math.sqrt(magSq);
+          steerX *= scale;
+          steerY *= scale;
+        }
+        steerX -= bvx;
+        steerY -= bvy;
+        const homeLimit = maxForceEff * 0.6;
+        const homeLimitSq = homeLimit * homeLimit;
+        magSq = steerX * steerX + steerY * steerY;
+        if (magSq > homeLimitSq) {
+          const scale = homeLimit / Math.sqrt(magSq);
+          steerX *= scale;
+          steerY *= scale;
+        }
+        ax += steerX * homeWeight * homeHold;
+        ay += steerY * homeWeight * homeHold;
       }
 
-      b.v.x += b.a.x;
-      b.v.y += b.a.y;
-      V.limit(b.v, maxSpeedEff);
+      b.a.x = ax;
+      b.a.y = ay;
+      bvx += ax;
+      bvy += ay;
+      const velocityMagSq = bvx * bvx + bvy * bvy;
+      if (velocityMagSq > maxSpeedEffSq) {
+        const scale = maxSpeedEff / Math.sqrt(velocityMagSq);
+        bvx *= scale;
+        bvy *= scale;
+      }
+      b.v.x = bvx;
+      b.v.y = bvy;
 
-      b.p.x += b.v.x;
-      b.p.y += b.v.y;
+      b.prevP.x = bpx;
+      b.prevP.y = bpy;
+      bp.x = bpx + bvx;
+      bp.y = bpy + bvy;
 
-      if (b.p.x < 0) b.p.x += w;
-      if (b.p.x >= w) b.p.x -= w;
-      if (b.p.y < 0) b.p.y += h;
-      if (b.p.y >= h) b.p.y -= h;
+      if (bp.x < 0) bp.x += w;
+      if (bp.x >= w) bp.x -= w;
+      if (bp.y < 0) bp.y += h;
+      if (bp.y >= h) bp.y -= h;
+    }
+    if (profilerEnabled) {
+      recordRuntimeMetric("boids.flock", performance.now() - flockStartedAt);
     }
   };
 
-  const step = () => {
+  const step = (profilerEnabled: boolean) => {
+    if (profilerEnabled) {
+      const skeletonStartedAt = performance.now();
+      stepSkeleton();
+      recordRuntimeMetric(
+        "boids.skeleton",
+        performance.now() - skeletonStartedAt
+      );
+      stepBoids(true);
+      return;
+    }
+
     stepSkeleton();
-    stepBoids();
+    stepBoids(false);
   };
 
-  const draw = () => {
-    const canvas = simCanvasRef.current!;
-    const ctx = canvas.getContext("2d")!;
+  const draw = (ctx: CanvasRenderingContext2D, interpolationAlpha: number) => {
     const { dpr } = sizeRef.current;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const { w, h } = sizeRef.current;
     const base = presetRef.current;
     const pixel = base.pixelSize;
+    const halfW = w * 0.5;
+    const halfH = h * 0.5;
+    const alpha = clamp(interpolationAlpha, 0, 1);
 
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, w, h);
@@ -1534,24 +1917,51 @@ export default function Boids({
     }
 
     const boids = boidsRef.current;
-    const speciesList = normalizeSpecies(base);
+    const speciesList = normalizedSpeciesRef.current;
     
     for (let i = 0; i < boids.length; i++) {
       const b = boids[i];
       const sc = speciesList[b.s];
+      let interpDx = b.p.x - b.prevP.x;
+      if (interpDx > halfW) interpDx -= w;
+      else if (interpDx < -halfW) interpDx += w;
+      let interpDy = b.p.y - b.prevP.y;
+      if (interpDy > halfH) interpDy -= h;
+      else if (interpDy < -halfH) interpDy += h;
+      const renderX = wrapCoord(b.prevP.x + interpDx * alpha, w);
+      const renderY = wrapCoord(b.prevP.y + interpDy * alpha, h);
     
       const maxSpeedEff = base.maxSpeed * (sc.maxSpeedScale ?? 1) * b.speedScale;
       const minSpeedEff = maxSpeedEff * 0.1;
       const speed = Math.hypot(b.v.x, b.v.y);
       b.smoothSpeed = lerp(b.smoothSpeed, speed, 0.01);
+      const t = clamp(
+        (b.smoothSpeed - minSpeedEff) /
+          Math.max(1e-6, maxSpeedEff - minSpeedEff),
+        0,
+        1
+      );
+      const shaped = Math.pow(t, 3.8);
+      let red = 0;
+      let green = 0;
+      let blue = 0;
 
-      const { r, g, b: blue } = speedToRgb(b.smoothSpeed, minSpeedEff, maxSpeedEff);
+      if (shaped < 0.5) {
+        const u = shaped / 0.5;
+        green = Math.round(255 * u);
+        blue = 255;
+      } else {
+        const u = (shaped - 0.5) / 0.5;
+        red = 255;
+        green = Math.round(255 * (1 - u));
+        blue = Math.round(255 * (1 - u));
+      }
       const opacity = sc.opacity ?? 1.0;
     
-      ctx.fillStyle = `rgba(${r}, ${g}, ${blue}, ${opacity})`;
+      ctx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${opacity})`;
     
-      const sx = Math.round(b.p.x / pixel) * pixel;
-      const sy = Math.round(b.p.y / pixel) * pixel;
+      const sx = Math.round(renderX / pixel) * pixel;
+      const sy = Math.round(renderY / pixel) * pixel;
       ctx.fillRect(sx, sy, pixel, pixel);
     }
   };
@@ -1567,6 +1977,11 @@ export default function Boids({
       interactionTargetRef?.current ?? (renderMode === "full" ? glCanvas : containerRef.current);
 
     if (!simCanvas || !interactionTarget) {
+      return;
+    }
+
+    const simContext = simCanvas.getContext("2d");
+    if (!simContext) {
       return;
     }
 
@@ -1735,7 +2150,6 @@ export default function Boids({
       const rw = Math.max(1, Math.floor(w * dpr));
       const rh = Math.max(1, Math.floor(h * dpr));
 
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
       gl.texImage2D(
@@ -1779,7 +2193,7 @@ export default function Boids({
           () => {
             gl!.uniform1i(blurUniforms!.texture, 0);
             gl!.uniform2f(blurUniforms!.resolution, w, h);
-            gl!.uniform1f(blurUniforms!.blurAmount, 6.0);
+            gl!.uniform1f(blurUniforms!.blurAmount, CREATURE_BLUR_AMOUNT);
           },
           currentTexture
         );
@@ -1794,7 +2208,10 @@ export default function Boids({
 
             const mouse = mouseRef.current ?? { x: w * 0.5, y: 0 };
             gl!.uniform2f(asciiUniforms!.mouse, mouse.x, mouse.y);
-            gl!.uniform1f(asciiUniforms!.pixelation, 1.0);
+            gl!.uniform1f(
+              asciiUniforms!.pixelation,
+              CREATURE_ASCII_PIXELATION
+            );
           },
           currentTexture
         );
@@ -1805,9 +2222,12 @@ export default function Boids({
           chromaticProgram,
           () => {
             gl!.uniform1i(chromaticUniforms!.texture, 0);
-            gl!.uniform1f(chromaticUniforms!.time, timeMs * 0.001);
+            gl!.uniform1f(chromaticUniforms!.time, 0);
             gl!.uniform2f(chromaticUniforms!.resolution, w, h);
-            gl!.uniform1f(chromaticUniforms!.strength, 0.003);
+            gl!.uniform1f(
+              chromaticUniforms!.strength,
+              CREATURE_CHROMATIC_STRENGTH
+            );
           },
           currentTexture
         );
@@ -1819,10 +2239,16 @@ export default function Boids({
           () => {
             gl!.uniform1i(glowUniforms!.texture, 0);
             gl!.uniform2f(glowUniforms!.resolution, w, h);
-            gl!.uniform1f(glowUniforms!.glowStrength, 1.35);
-            gl!.uniform1f(glowUniforms!.glowRadius, 6.0);
-            gl!.uniform1f(glowUniforms!.radialStrength, 2.0);
-            gl!.uniform1f(glowUniforms!.radialFalloff, 1.65);
+            gl!.uniform1f(glowUniforms!.glowStrength, CREATURE_GLOW_STRENGTH);
+            gl!.uniform1f(glowUniforms!.glowRadius, CREATURE_GLOW_RADIUS);
+            gl!.uniform1f(
+              glowUniforms!.radialStrength,
+              CREATURE_GLOW_RADIAL_STRENGTH
+            );
+            gl!.uniform1f(
+              glowUniforms!.radialFalloff,
+              CREATURE_GLOW_RADIAL_FALLOFF
+            );
           },
           currentTexture
         );
@@ -1834,9 +2260,9 @@ export default function Boids({
           () => {
             gl!.uniform1i(vignetteUniforms!.texture, 0);
             gl!.uniform2f(vignetteUniforms!.resolution, w, h);
-            gl!.uniform1f(vignetteUniforms!.strength, 3.0);
-            gl!.uniform1f(vignetteUniforms!.power, 1.1);
-            gl!.uniform1f(vignetteUniforms!.zoom, 1.5);
+            gl!.uniform1f(vignetteUniforms!.strength, CREATURE_VIGNETTE_STRENGTH);
+            gl!.uniform1f(vignetteUniforms!.power, CREATURE_VIGNETTE_POWER);
+            gl!.uniform1f(vignetteUniforms!.zoom, CREATURE_VIGNETTE_ZOOM);
           },
           currentTexture
         );
@@ -1864,6 +2290,8 @@ export default function Boids({
       if (!gl) {
         throw new Error("WebGL not supported");
       }
+
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
 
       copyProgram = createProgram(gl, copyVert, copyFrag);
       chromaticProgram = createProgram(
@@ -1953,15 +2381,25 @@ export default function Boids({
       };
     }
 
-    const onMove = (event: MouseEvent) => {
+    const updateInteractionBounds = () => {
       const rect = interactionTarget.getBoundingClientRect();
+      interactionBoundsRef.current = {
+        height: Math.max(1, rect.height),
+        left: rect.left,
+        top: rect.top,
+        width: Math.max(1, rect.width),
+      };
+    };
+
+    const onMove = (event: MouseEvent) => {
+      const rect = interactionBoundsRef.current;
       const xNorm = clamp(
-        (event.clientX - rect.left) / Math.max(1, rect.width),
+        (event.clientX - rect.left) / rect.width,
         0,
         1
       );
       const yNorm = clamp(
-        (event.clientY - rect.top) / Math.max(1, rect.height),
+        (event.clientY - rect.top) / rect.height,
         0,
         1
       );
@@ -1999,8 +2437,10 @@ export default function Boids({
       initSkeleton();
       resetBoids();
       allocPassTargets();
+      updateInteractionBounds();
     };
 
+    updateInteractionBounds();
     window.addEventListener("resize", onResize);
     interactionTarget.addEventListener("mousemove", onMove);
     interactionTarget.addEventListener("mouseleave", onLeave);
@@ -2008,28 +2448,107 @@ export default function Boids({
     interactionTarget.addEventListener("mouseup", onMouseUp);
     interactionTarget.addEventListener("contextmenu", onContextMenu);
 
-    runningRef.current = true;
-    let raf = 0;
-    let lastFrameTime = 0;
+	    runningRef.current = true;
+	    let raf = 0;
+	    let accumulatorMs = 0;
+	    let lastRafTime = 0;
 
-    const loop = (time: number) => {
-      if (!runningRef.current) return;
+	    const loop = (time: number) => {
+	      if (!runningRef.current) return;
+	      const isHidden =
+	        effectiveVisibilityRef.current <= 0.02 ||
+	        (typeof document !== "undefined" && document.hidden);
 
-      if (
-        boidsRuntime.frameIntervalMs > 0 &&
-        lastFrameTime > 0 &&
-        time - lastFrameTime < boidsRuntime.frameIntervalMs
-      ) {
-        raf = requestAnimationFrame(loop);
-        return;
-      }
+	      if (lastRafTime <= 0) {
+	        lastRafTime = time;
+	      }
 
-      lastFrameTime = time;
+	      let rafDeltaMs = time - lastRafTime;
+	      lastRafTime = time;
 
-      step();
-      draw();
-      if (renderMode === "full") {
-        renderPost(time);
+	      if (isHidden) {
+	        accumulatorMs = 0;
+	        raf = requestAnimationFrame(loop);
+	        return;
+	      }
+
+	      const simulationStepMs =
+	        boidsRuntime.frameIntervalMs > 0
+	          ? boidsRuntime.frameIntervalMs
+	          : DEFAULT_SIMULATION_STEP_MS;
+	      const maxSimulationStepsPerFrame =
+	        boidsRuntime.frameIntervalMs > 0
+	          ? THROTTLED_MAX_SIMULATION_STEPS_PER_FRAME
+	          : DESKTOP_MAX_SIMULATION_STEPS_PER_FRAME;
+	      const clampedFrameDeltaMs = clamp(
+	        Number.isFinite(rafDeltaMs) && rafDeltaMs > 0
+	          ? rafDeltaMs
+	          : simulationStepMs,
+	        0,
+	        Math.min(
+	          MAX_VISIBLE_FRAME_DELTA_MS,
+	          simulationStepMs * maxSimulationStepsPerFrame
+	        )
+	      );
+	      accumulatorMs = Math.min(
+	        accumulatorMs + clampedFrameDeltaMs,
+	        simulationStepMs * maxSimulationStepsPerFrame
+	      );
+
+	      const profilerEnabled = isRuntimeProfilerEnabled();
+	      const frameStartedAt = profilerEnabled ? performance.now() : 0;
+	      let simStepsThisFrame = 0;
+
+	      if (profilerEnabled) {
+	        const simulationStartedAt = performance.now();
+	        while (
+	          accumulatorMs >= simulationStepMs &&
+	          simStepsThisFrame < maxSimulationStepsPerFrame
+	        ) {
+	          step(true);
+	          accumulatorMs -= simulationStepMs;
+	          simStepsThisFrame++;
+	        }
+	        recordRuntimeMetric("boids.sim", performance.now() - simulationStartedAt);
+	        recordRuntimeMetric("boids.rafDelta", clampedFrameDeltaMs);
+	        recordRuntimeMetric(
+	          "boids.rafJitter",
+	          Math.abs(clampedFrameDeltaMs - simulationStepMs)
+	        );
+	        recordRuntimeMetric("boids.simBacklogMs", accumulatorMs);
+	        recordRuntimeMetric("boids.simStepMs", simulationStepMs);
+	        recordRuntimeMetric("boids.simStepsPerFrame", simStepsThisFrame);
+
+	        const drawStartedAt = performance.now();
+	        draw(
+	          simContext,
+	          simulationStepMs > 0 ? accumulatorMs / simulationStepMs : 1
+	        );
+	        recordRuntimeMetric("boids.draw", performance.now() - drawStartedAt);
+
+	        if (renderMode === "full") {
+          const postStartedAt = performance.now();
+          renderPost(time);
+          recordRuntimeMetric("boids.post", performance.now() - postStartedAt);
+        }
+
+	        recordRuntimeMetric("boids.frame", performance.now() - frameStartedAt);
+	      } else {
+	        while (
+	          accumulatorMs >= simulationStepMs &&
+	          simStepsThisFrame < maxSimulationStepsPerFrame
+	        ) {
+	          step(false);
+	          accumulatorMs -= simulationStepMs;
+	          simStepsThisFrame++;
+	        }
+	        draw(
+	          simContext,
+	          simulationStepMs > 0 ? accumulatorMs / simulationStepMs : 1
+	        );
+	        if (renderMode === "full") {
+	          renderPost(time);
+	        }
       }
       raf = requestAnimationFrame(loop);
     };

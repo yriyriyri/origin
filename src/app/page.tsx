@@ -4,6 +4,10 @@ import Boids from "@/components/Boids";
 import CymaticVisualizer from "@/components/CymaticVisualizer";
 import SmoothScroll from "@/components/SmoothScroll";
 import { useCanvasRuntimeProfile } from "@/hooks/useCanvasRuntimeProfile";
+import {
+  isRuntimeProfilerEnabled,
+  recordRuntimeMetric,
+} from "@/lib/runtimeProfiler";
 import type { CSSProperties } from "react";
 import {
   useCallback,
@@ -55,6 +59,7 @@ const PIXELATE_LEVELS: readonly PixelateLevel[] = [
 const PIXELATE_OPACITY_DROP = 0.24;
 const PIXELATE_OPACITY_RAMP = 0.14;
 const BOIDS_SCALE = 1.5;
+const VISUALIZER_SHELL_OPACITY_FLOOR = 0.72;
 const HERO_ABOUT_IN_END = 0.58;
 const HERO_TITLE_RETURN_END = 0.26;
 const HERO_CONTENT_OFFSET = HERO_TITLE_RETURN_END;
@@ -146,6 +151,18 @@ const getPixelateOpacity = (progress: number) => {
 
   const ramp = ease(Math.min(1, active / PIXELATE_OPACITY_RAMP));
   return 1 - PIXELATE_OPACITY_DROP * ramp;
+};
+
+const getVisualizerShellOpacity = (visibility: number) => {
+  const active = clamp01(visibility);
+  if (active <= 0.001) {
+    return 0;
+  }
+
+  return (
+    VISUALIZER_SHELL_OPACITY_FLOOR +
+    (1 - VISUALIZER_SHELL_OPACITY_FLOOR) * active
+  );
 };
 
 const getScrollVisualSnapshot = (
@@ -275,6 +292,9 @@ export default function Home() {
   });
   const scrollOverlayTimeoutRef = useRef<number | null>(null);
   const boidsDisperseRef = useRef(INITIAL_SCROLL_VISUALS.disperseAmount);
+  const boidsVisibilityRef = useRef(
+    1 - INITIAL_SCROLL_VISUALS.boidsOverlayOpacity
+  );
   const visualizerValueRef = useRef(INITIAL_SCROLL_VISUALS.visualizerValue);
   const visualizerOpacityRef = useRef(INITIAL_SCROLL_VISUALS.visualizerOpacity);
   const [siteInvert, setSiteInvert] = useState(false);
@@ -286,6 +306,7 @@ export default function Home() {
     }
 
     boidsDisperseRef.current = visuals.disperseAmount;
+    boidsVisibilityRef.current = 1 - visuals.boidsOverlayOpacity;
     visualizerValueRef.current = visuals.visualizerValue;
     visualizerOpacityRef.current = visuals.visualizerOpacity;
 
@@ -319,7 +340,9 @@ export default function Home() {
     }
 
     if (placeholderVisualizerShellRef.current) {
-      placeholderVisualizerShellRef.current.style.opacity = `${visuals.visualizerOpacity}`;
+      placeholderVisualizerShellRef.current.style.opacity = `${getVisualizerShellOpacity(
+        visuals.visualizerOpacity
+      )}`;
     }
 
     visuals.placeholderCards.forEach((card, index) => {
@@ -374,10 +397,16 @@ export default function Home() {
   const handleScroll = useCallback((scroll: number, showIndicator = true) => {
     const { maxScroll, sectionTop, stickyTravel, vh } = placeholderMetricsRef.current;
     const placeholderProgress = clamp01((scroll - sectionTop) / stickyTravel);
+    const profilerEnabled = isRuntimeProfilerEnabled();
+    const startedAt = profilerEnabled ? performance.now() : 0;
 
     applyScrollVisuals(
       getScrollVisualSnapshot(scroll, vh, maxScroll, placeholderProgress)
     );
+
+    if (profilerEnabled) {
+      recordRuntimeMetric("scroll.apply", performance.now() - startedAt);
+    }
 
     if (showIndicator) {
       setScrollOverlayVisible(true);
@@ -442,7 +471,7 @@ export default function Home() {
   useLayoutEffect(() => {
     updatePlaceholderMetrics();
     handleScroll(window.scrollY, false);
-  });
+  }, [handleScroll, updatePlaceholderMetrics]);
 
   useEffect(() => {
     return () => {
@@ -509,6 +538,7 @@ export default function Home() {
             disperse={INITIAL_SCROLL_VISUALS.disperseAmount}
             disperseValueRef={boidsDisperseRef}
             runtimeProfile={canvasRuntimeProfile}
+            visibilityRefExternal={boidsVisibilityRef}
           />
           <div
             ref={boidsFadeRef}
@@ -610,15 +640,21 @@ export default function Home() {
           <div
             ref={placeholderVisualizerShellRef}
             className="placeholder-visualizer"
-            style={{ opacity: INITIAL_SCROLL_VISUALS.visualizerOpacity }}
+            style={{
+              opacity: getVisualizerShellOpacity(
+                INITIAL_SCROLL_VISUALS.visualizerOpacity
+              ),
+            }}
           >
-            <CymaticVisualizer
-              value={INITIAL_SCROLL_VISUALS.visualizerValue}
-              opacity={1}
-              opacityRefExternal={visualizerOpacityRef}
-              runtimeProfile={canvasRuntimeProfile}
-              valueRefExternal={visualizerValueRef}
-            />
+            <div className="placeholder-visualizer-orb">
+              <CymaticVisualizer
+                value={INITIAL_SCROLL_VISUALS.visualizerValue}
+                opacity={1}
+                opacityRefExternal={visualizerOpacityRef}
+                runtimeProfile={canvasRuntimeProfile}
+                valueRefExternal={visualizerValueRef}
+              />
+            </div>
           </div>
         </div>
 
@@ -737,6 +773,68 @@ export default function Home() {
           display: flex;
           justify-content: center;
           align-items: center;
+        }
+
+        .placeholder-visualizer-orb {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 1 / 1;
+          border-radius: 50%;
+          overflow: hidden;
+          isolation: isolate;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.03);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          box-shadow:
+            0 26px 80px rgba(0, 0, 0, 0.36),
+            inset 0 1px 0 rgba(255, 255, 255, 0.14),
+            inset 0 -28px 52px rgba(255, 255, 255, 0.035);
+        }
+
+        .placeholder-visualizer-orb::before,
+        .placeholder-visualizer-orb::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          z-index: 2;
+        }
+
+        .placeholder-visualizer-orb::before {
+          background:
+            radial-gradient(
+              circle at 34% 26%,
+              rgba(255, 255, 255, 0.18) 0,
+              rgba(255, 255, 255, 0.08) 20%,
+              rgba(255, 255, 255, 0.015) 42%,
+              rgba(255, 255, 255, 0) 62%
+            ),
+            linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.08) 0%,
+              rgba(255, 255, 255, 0.025) 34%,
+              rgba(255, 255, 255, 0) 72%
+            );
+        }
+
+        .placeholder-visualizer-orb::after {
+          inset: 1px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          box-shadow:
+            inset 0 0 36px rgba(255, 255, 255, 0.035),
+            inset 0 -36px 60px rgba(0, 0, 0, 0.14);
+        }
+
+        .placeholder-visualizer-orb :global(.root) {
+          width: 100%;
+          height: 100%;
+        }
+
+        .placeholder-visualizer-orb :global(.square) {
+          width: 100%;
+          height: 100%;
         }
 
         .hero-intro {
