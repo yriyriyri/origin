@@ -1999,6 +1999,27 @@ export default function Boids({
       return;
     }
 
+    if (runtimeProfile.isMobile) {
+      runningRef.current = false;
+      mouseRef.current = null;
+      mouseModeRef.current = "off";
+
+      simCanvas.width = 1;
+      simCanvas.height = 1;
+      simContext.clearRect(0, 0, 1, 1);
+
+      if (glCanvas) {
+        glCanvas.width = 1;
+        glCanvas.height = 1;
+      }
+
+      if (sourceCanvasRef) {
+        sourceCanvasRef.current = simCanvas;
+      }
+
+      return;
+    }
+
     let gl: WebGLRenderingContext | null = null;
     let copyProgram: WebGLProgram | null = null;
     let chromaticProgram: WebGLProgram | null = null;

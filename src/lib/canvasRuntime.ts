@@ -109,14 +109,27 @@ export const MOBILE_CANVAS_RUNTIME: CanvasRuntimeProfile = {
   },
 };
 
+const MOBILE_USER_AGENT_PATTERN =
+  /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i;
+
 export const detectMobileCanvasRuntime = () => {
-  if (typeof window === "undefined") {
+  if (typeof navigator === "undefined") {
     return false;
   }
 
-  const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
-  const reducedViewport = window.matchMedia("(max-width: 900px)").matches;
-  const touchPoints = navigator.maxTouchPoints > 0;
+  const navigatorWithUAData = navigator as Navigator & {
+    userAgentData?: {
+      mobile?: boolean;
+    };
+  };
+  const uaDataMobile = navigatorWithUAData.userAgentData?.mobile;
 
-  return coarsePointer || (touchPoints && reducedViewport);
+  if (typeof uaDataMobile === "boolean") {
+    return uaDataMobile;
+  }
+
+  const iPadLikeDesktop =
+    navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+
+  return iPadLikeDesktop || MOBILE_USER_AGENT_PATTERN.test(navigator.userAgent);
 };
