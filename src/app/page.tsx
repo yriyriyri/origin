@@ -28,12 +28,6 @@ import {
   useState,
 } from "react";
 
-type PixelateLevel = {
-  cell: number;
-  dilate: number;
-  tile: number;
-};
-
 type PlaceholderCardVisual = {
   opacity: number;
   pixelate: number;
@@ -61,15 +55,7 @@ const ease = (value: number) => {
   const t = clamp01(value);
   return t * t * (3 - 2 * t);
 };
-const PIXELATE_LEVELS: readonly PixelateLevel[] = [
-  { cell: 1.0, dilate: 0.2, tile: 2.6 },
-  { cell: 1.5, dilate: 0.6, tile: 4.3 },
-  { cell: 1.75, dilate: 0.8, tile: 5.15 },
-  { cell: 2.0, dilate: 1.0, tile: 6.0 },
-  { cell: 2.25, dilate: 1.2, tile: 6.85 },
-] as const;
-const PIXELATE_OPACITY_DROP = 0.24;
-const PIXELATE_OPACITY_RAMP = 0.14;
+const TEXT_BLUR_MAX_PX = 14;
 const BOIDS_SCALE = 1.5;
 const HERO_ABOUT_IN_END = 0.58;
 const HERO_TITLE_RETURN_END = 0.26;
@@ -223,28 +209,13 @@ const getAgentDisplayValue = (timeline: number, total: number) => {
   );
 };
 
-const getPixelateFilter = (progress: number) => {
+const getTextBlurFilter = (progress: number) => {
   const active = clamp01(progress);
   if (active <= 0.001) {
     return "none";
   }
 
-  const level = Math.min(
-    PIXELATE_LEVELS.length,
-    Math.max(1, Math.ceil(active * PIXELATE_LEVELS.length))
-  );
-
-  return `url(#pixelate-${level})`;
-};
-
-const getPixelateOpacity = (progress: number) => {
-  const active = clamp01(progress);
-  if (active <= 0.001) {
-    return 1;
-  }
-
-  const ramp = ease(Math.min(1, active / PIXELATE_OPACITY_RAMP));
-  return 1 - PIXELATE_OPACITY_DROP * ramp;
+  return `blur(${(ease(active) * TEXT_BLUR_MAX_PX).toFixed(2)}px)`;
 };
 
 const getVisualizerShellOpacity = (visibility: number) => {
@@ -328,14 +299,12 @@ const getScrollVisualSnapshot = (
   const aboutIn = aboutProgress;
   const aboutOut = 1 - aboutFadeProgress;
   const aboutPixelate = Math.max(1 - aboutIn, aboutFadeProgress);
-  const aboutOpacity =
-    Math.min(aboutIn, aboutOut) * getPixelateOpacity(aboutPixelate);
+  const aboutOpacity = Math.min(aboutIn, aboutOut);
   const aboutTranslateY =
     aboutIn < 1 ? 24 * (1 - aboutIn) : -14 * aboutFadeProgress;
 
   const titlePixelate = titleProgress;
-  const titleOpacity =
-    (1 - titleProgress) * getPixelateOpacity(titlePixelate);
+  const titleOpacity = 1 - titleProgress;
 
   const hintOpacity = Math.max(0, 1 - aboutProgress * 3);
   const placeholderTotalSpan =
@@ -357,7 +326,7 @@ const getScrollVisualSnapshot = (
     const pixelate = 1 - visibility;
 
     return {
-      opacity: Math.pow(visibility, 1.15) * getPixelateOpacity(pixelate),
+      opacity: Math.pow(visibility, 1.15),
       pixelate,
       translateY:
         phase < 0 ? 28 * (1 - visibility) : -18 * (1 - visibility),
@@ -459,12 +428,12 @@ export default function Home() {
 
     if (heroIntroRef.current) {
       heroIntroRef.current.style.opacity = `${visuals.titleOpacity}`;
-      heroIntroRef.current.style.filter = getPixelateFilter(visuals.titlePixelate);
+      heroIntroRef.current.style.filter = getTextBlurFilter(visuals.titlePixelate);
     }
 
     if (aboutCopyRef.current) {
       aboutCopyRef.current.style.opacity = `${visuals.aboutOpacity}`;
-      aboutCopyRef.current.style.filter = getPixelateFilter(
+      aboutCopyRef.current.style.filter = getTextBlurFilter(
         visuals.aboutPixelate
       );
       aboutCopyRef.current.style.transform = `translateY(${visuals.aboutTranslateY}px)`;
@@ -503,7 +472,7 @@ export default function Home() {
       }
 
       node.style.opacity = `${card.opacity}`;
-      node.style.filter = getPixelateFilter(card.pixelate);
+      node.style.filter = getTextBlurFilter(card.pixelate);
       node.style.transform = `translateY(${card.translateY}px)`;
     });
   }, []);
@@ -634,39 +603,6 @@ export default function Home() {
 
   return (
     <>
-      <svg
-        aria-hidden="true"
-        className="pixelate-defs"
-        width="0"
-        height="0"
-        style={{ position: "fixed" }}
-      >
-        <defs>
-          {PIXELATE_LEVELS.map((level, index) => (
-            <filter
-              id={`pixelate-${index + 1}`}
-              key={`pixelate-${index + 1}`}
-              x="-20%"
-              y="-20%"
-              width="140%"
-              height="140%"
-              colorInterpolationFilters="sRGB"
-            >
-              <feFlood
-                x="0"
-                y="0"
-                width={level.cell}
-                height={level.cell}
-              />
-              <feComposite width={level.tile} height={level.tile} />
-              <feTile result="pixelateMask" />
-              <feComposite in="SourceGraphic" in2="pixelateMask" operator="in" />
-              <feMorphology operator="dilate" radius={level.dilate} />
-            </filter>
-          ))}
-        </defs>
-      </svg>
-
       <SmoothScroll
         onScroll={handleScroll}
       />
@@ -712,7 +648,7 @@ export default function Home() {
             className="hero-intro"
             style={{
               opacity: INITIAL_SCROLL_VISUALS.titleOpacity,
-              filter: getPixelateFilter(INITIAL_SCROLL_VISUALS.titlePixelate),
+              filter: getTextBlurFilter(INITIAL_SCROLL_VISUALS.titlePixelate),
             }}
           >
             <span className="hero-intro-word">origin</span>
@@ -723,7 +659,7 @@ export default function Home() {
             ref={aboutCopyRef}
             className="about-copy"
             style={{
-              filter: getPixelateFilter(INITIAL_SCROLL_VISUALS.aboutPixelate),
+              filter: getTextBlurFilter(INITIAL_SCROLL_VISUALS.aboutPixelate),
               opacity: INITIAL_SCROLL_VISUALS.aboutOpacity,
               transform: `translateY(${INITIAL_SCROLL_VISUALS.aboutTranslateY}px)`,
             }}
@@ -768,7 +704,7 @@ export default function Home() {
                 className="placeholder-card"
                 style={{
                   opacity: INITIAL_SCROLL_VISUALS.placeholderCards[index].opacity,
-                  filter: getPixelateFilter(
+                  filter: getTextBlurFilter(
                     INITIAL_SCROLL_VISUALS.placeholderCards[index].pixelate
                   ),
                   transform: `translateY(${INITIAL_SCROLL_VISUALS.placeholderCards[index].translateY}px)`,
