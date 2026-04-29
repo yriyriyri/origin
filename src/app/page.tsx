@@ -964,7 +964,7 @@ export default function Home() {
         .placeholder-title {
           font-family: var(--font-space-grotesk);
           font-size: clamp(18px, 2.55vw, 31px);
-          font-weight: 400;
+          font-weight: 300;
           line-height: 1.1;
           letter-spacing: 0.03em;
           text-transform: lowercase;
@@ -987,6 +987,7 @@ export default function Home() {
         .placeholder-body p {
           font-family: var(--font-space-grotesk);
           font-size: clamp(18px, 2.55vw, 31px);
+          font-weight: 300;
           line-height: 1.75;
           color: rgba(255, 255, 255, 0.9);
           margin-bottom: 1.6em;
