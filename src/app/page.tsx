@@ -1132,9 +1132,8 @@ export default function Home() {
         }
 
         main[data-mobile-runtime="true"] .placeholder-copy {
-          position: absolute;
-          inset: auto 0 0 0;
-          height: 46vh;
+          inset: 0;
+          height: auto;
         }
 
         main[data-mobile-runtime="true"] .placeholder-card {
