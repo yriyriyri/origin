@@ -1302,103 +1302,96 @@ export default function CymaticVisualizer({
       const simStartedAt = profilerEnabled ? performance.now() : 0;
       const projectStartedAt = profilerEnabled ? performance.now() : 0;
 
-      for (let i = 0; i < particles.length; i++) {
-        const particle = particles[i];
-        let projection: { x: number; y: number; gradientX: number; gradientY: number; sourceEnergy: number };
-        if (useBakedMode) {
-          // Zero trig: lerp between two pre-baked Float32Arrays
+      if (useBakedMode) {
+        // Mobile: skip sim entirely — write baked positions + energy directly.
+        // Colors still computed realtime in the draw loop below.
+        const dA = bakedProjections[bakedBaseIdx];
+        const dB = bakedProjections[bakedNextIdx];
+        for (let i = 0; i < particles.length; i++) {
           const base = i * 5;
-          const dA = bakedProjections[bakedBaseIdx];
-          const dB = bakedProjections[bakedNextIdx];
           if (bakedMix <= 1e-6) {
-            projection = {
-              x: dA[base],
-              y: dA[base + 1],
-              gradientX: dA[base + 2],
-              gradientY: dA[base + 3],
-              sourceEnergy: dA[base + 4],
-            };
+            particles[i].x = dA[base];
+            particles[i].y = dA[base + 1];
+            particles[i].energy = dA[base + 4];
           } else {
-            projection = {
-              x: lerp(dA[base], dB[base], bakedMix),
-              y: lerp(dA[base + 1], dB[base + 1], bakedMix),
-              gradientX: lerp(dA[base + 2], dB[base + 2], bakedMix),
-              gradientY: lerp(dA[base + 3], dB[base + 3], bakedMix),
-              sourceEnergy: lerp(dA[base + 4], dB[base + 4], bakedMix),
-            };
+            particles[i].x = lerp(dA[base],     dB[base],     bakedMix);
+            particles[i].y = lerp(dA[base + 1], dB[base + 1], bakedMix);
+            particles[i].energy = lerp(dA[base + 4], dB[base + 4], bakedMix);
           }
-        } else if (customMode) {
-          projection = projectTowardNodeForMode(
-            particle.homeX,
-            particle.homeY,
-            customMode,
-            cymaticsRuntime.nodeProjectionSteps
-          );
-        } else {
-          projection = projectTowardBlendedModes(
-            particle.homeX,
-            particle.homeY,
-            blendedModes!,
-            cymaticsRuntime.nodeProjectionSteps
-          );
         }
-        const desiredX = lerp(particle.homeX, projection.x, nodePullRef.current);
-        const desiredY = lerp(particle.homeY, projection.y, nodePullRef.current);
-        const gradientMag = Math.hypot(projection.gradientX, projection.gradientY) || 1e-6;
-        const tangentX = -projection.gradientY / gradientMag;
-        const tangentY = projection.gradientX / gradientMag;
-        const energyBias = clamp(0.24 + projection.sourceEnergy * 0.65, 0.24, 1.6);
-        const tangentialDrift = 0.00045 + Math.min(0.0009, projection.sourceEnergy * 0.00045);
-        const jitter = 0.0012 * energyBias;
-        const distToCenter = Math.hypot(particle.x, particle.y);
+      } else {
+        // Desktop: full physics simulation
+        for (let i = 0; i < particles.length; i++) {
+          const particle = particles[i];
+          const projection = customMode
+            ? projectTowardNodeForMode(
+                particle.homeX,
+                particle.homeY,
+                customMode,
+                cymaticsRuntime.nodeProjectionSteps
+              )
+            : projectTowardBlendedModes(
+                particle.homeX,
+                particle.homeY,
+                blendedModes!,
+                cymaticsRuntime.nodeProjectionSteps
+              );
+          const desiredX = lerp(particle.homeX, projection.x, nodePullRef.current);
+          const desiredY = lerp(particle.homeY, projection.y, nodePullRef.current);
+          const gradientMag = Math.hypot(projection.gradientX, projection.gradientY) || 1e-6;
+          const tangentX = -projection.gradientY / gradientMag;
+          const tangentY = projection.gradientX / gradientMag;
+          const energyBias = clamp(0.24 + projection.sourceEnergy * 0.65, 0.24, 1.6);
+          const tangentialDrift = 0.00045 + Math.min(0.0009, projection.sourceEnergy * 0.00045);
+          const jitter = 0.0012 * energyBias;
+          const distToCenter = Math.hypot(particle.x, particle.y);
 
-        particle.vx +=
-          (desiredX - particle.x) * 0.05 +
-          tangentX * tangentialDrift * particle.spin +
-          (Math.random() * 2 - 1) * jitter;
-        particle.vy +=
-          (desiredY - particle.y) * 0.05 +
-          tangentY * tangentialDrift * particle.spin +
-          (Math.random() * 2 - 1) * jitter;
+          particle.vx +=
+            (desiredX - particle.x) * 0.05 +
+            tangentX * tangentialDrift * particle.spin +
+            (Math.random() * 2 - 1) * jitter;
+          particle.vy +=
+            (desiredY - particle.y) * 0.05 +
+            tangentY * tangentialDrift * particle.spin +
+            (Math.random() * 2 - 1) * jitter;
 
-        if (distToCenter < CENTER_REPEL_RADIUS) {
-          const angle = i * 2.399963229728653;
-          const ux = distToCenter > 1e-4 ? particle.x / distToCenter : Math.cos(angle);
-          const uy = distToCenter > 1e-4 ? particle.y / distToCenter : Math.sin(angle);
-          const repel =
-            Math.pow(1 - distToCenter / CENTER_REPEL_RADIUS, 2) *
-            CENTER_REPEL_STRENGTH;
+          if (distToCenter < CENTER_REPEL_RADIUS) {
+            const angle = i * 2.399963229728653;
+            const ux = distToCenter > 1e-4 ? particle.x / distToCenter : Math.cos(angle);
+            const uy = distToCenter > 1e-4 ? particle.y / distToCenter : Math.sin(angle);
+            const repel =
+              Math.pow(1 - distToCenter / CENTER_REPEL_RADIUS, 2) *
+              CENTER_REPEL_STRENGTH;
 
-          particle.vx += ux * repel;
-          particle.vy += uy * repel;
-        }
+            particle.vx += ux * repel;
+            particle.vy += uy * repel;
+          }
 
-        if (particle.x < -edge || particle.x > edge) {
-          particle.vx += particle.x > 0 ? -0.003 : 0.003;
-        }
-        if (particle.y < -edge || particle.y > edge) {
-          particle.vy += particle.y > 0 ? -0.003 : 0.003;
-        }
+          if (particle.x < -edge || particle.x > edge) {
+            particle.vx += particle.x > 0 ? -0.003 : 0.003;
+          }
+          if (particle.y < -edge || particle.y > edge) {
+            particle.vy += particle.y > 0 ? -0.003 : 0.003;
+          }
 
-        particle.vx *= 0.92;
-        particle.vy *= 0.92;
-        particle.x += particle.vx;
-        particle.y += particle.vy;
+          particle.vx *= 0.92;
+          particle.vy *= 0.92;
+          particle.x += particle.vx;
+          particle.y += particle.vy;
 
-        if (particle.x < -1 || particle.x > 1) {
-          particle.x = clamp(particle.x, -1, 1);
-          particle.vx *= -0.35;
-        }
-        if (particle.y < -1 || particle.y > 1) {
-          particle.y = clamp(particle.y, -1, 1);
-          particle.vy *= -0.35;
-        }
+          if (particle.x < -1 || particle.x > 1) {
+            particle.x = clamp(particle.x, -1, 1);
+            particle.vx *= -0.35;
+          }
+          if (particle.y < -1 || particle.y > 1) {
+            particle.y = clamp(particle.y, -1, 1);
+            particle.vy *= -0.35;
+          }
 
-        particle.energy = useBakedMode
-          ? projection.sourceEnergy
-          : customMode
+          particle.energy = customMode
             ? fieldEnergyForMode(particle.x, particle.y, customMode)
             : fieldEnergyForBlendedModes(particle.x, particle.y, blendedModes!);
+        }
       }
 
       if (profilerEnabled) {
