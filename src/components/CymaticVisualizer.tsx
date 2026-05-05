@@ -1307,8 +1307,8 @@ export default function CymaticVisualizer({
         // damped-velocity jitter to restore organic movement without any trig.
         // vx/vy are unused by physics on this path so we repurpose them as
         // jitter accumulators.
-        const JITTER_IMPULSE = 0.0018;
-        const JITTER_DAMPING = 0.88;
+        const JITTER_IMPULSE = 0.012;
+        const JITTER_DAMPING = 0.82;
         const dA = bakedProjections[bakedBaseIdx];
         const dB = bakedProjections[bakedNextIdx];
         for (let i = 0; i < particles.length; i++) {
