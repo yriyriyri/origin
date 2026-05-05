@@ -1138,12 +1138,10 @@ export default function Home() {
         }
 
         main[data-mobile-runtime="true"] .placeholder-card {
-          inset: auto 0 0 0;
-          height: 46vh;
-          padding: 0 24px 36px;
-          display: flex;
-          flex-direction: column;
-          justify-content: flex-end;
+          inset: 0;
+          height: auto;
+          padding: 0;
+          display: block;
         }
 
         main[data-mobile-runtime="true"] .placeholder-title {
@@ -1157,9 +1155,9 @@ export default function Home() {
           left: auto;
           width: 100%;
           max-width: none;
-          margin-top: 18px;
-          padding-top: 18px;
-          border-top: 1px solid rgba(255, 255, 255, 0.18);
+          margin-top: 20px;
+          padding-top: 0;
+          border-top: none;
           transform: none;
         }
 
@@ -1172,21 +1170,34 @@ export default function Home() {
         }
 
         main[data-mobile-runtime="true"] .about-copy {
-          inset: auto 24px 36px;
-          height: 46vh;
+          inset: 0;
+          height: auto;
         }
 
         main[data-mobile-runtime="true"] .about-copy-group,
         main[data-mobile-runtime="true"] .placeholder-copy-group {
           position: absolute;
           top: 50%;
-          left: 0;
-          width: 100%;
+          left: 50%;
+          width: 80vw;
           max-width: none;
+          transform: translate(-50%, -50%);
         }
 
         main[data-mobile-runtime="true"] .about-body {
           width: 100%;
+        }
+
+        main[data-mobile-runtime="true"] .about-kicker,
+        main[data-mobile-runtime="true"] .placeholder-title {
+          font-size: 36px;
+        }
+
+        main[data-mobile-runtime="true"] .about-body p,
+        main[data-mobile-runtime="true"] .placeholder-body p {
+          font-size: 15px;
+          line-height: 1.7;
+          margin-bottom: 1.2em;
         }
 
         .placeholder-body p:last-child {
