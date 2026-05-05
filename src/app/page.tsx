@@ -422,6 +422,10 @@ export default function Home() {
     isReady: runtimeReady,
     profile: canvasRuntimeProfile,
   } = useCanvasRuntimeProfile();
+  // Stable ref so the useCallback scroll handler can always read current mobile state
+  const isMobileRuntimeRef = useRef(isMobileRuntime);
+  isMobileRuntimeRef.current = isMobileRuntime;
+
   const mainRef = useRef<HTMLElement | null>(null);
   const boidsFadeRef = useRef<HTMLDivElement | null>(null);
   const heroIntroRef = useRef<HTMLDivElement | null>(null);
@@ -462,14 +466,16 @@ export default function Home() {
 
     if (heroIntroRef.current) {
       heroIntroRef.current.style.opacity = `${visuals.titleOpacity}`;
-      heroIntroRef.current.style.filter = getPixelateFilter(visuals.titlePixelate);
+      if (!isMobileRuntimeRef.current) {
+        heroIntroRef.current.style.filter = getPixelateFilter(visuals.titlePixelate);
+      }
     }
 
     if (aboutCopyRef.current) {
       aboutCopyRef.current.style.opacity = `${visuals.aboutOpacity}`;
-      aboutCopyRef.current.style.filter = getPixelateFilter(
-        visuals.aboutPixelate
-      );
+      if (!isMobileRuntimeRef.current) {
+        aboutCopyRef.current.style.filter = getPixelateFilter(visuals.aboutPixelate);
+      }
       aboutCopyRef.current.style.transform = `translateY(${visuals.aboutTranslateY}px)`;
     }
 
@@ -510,7 +516,9 @@ export default function Home() {
       }
 
       node.style.opacity = `${card.opacity}`;
-      node.style.filter = getPixelateFilter(card.pixelate);
+      if (!isMobileRuntimeRef.current) {
+        node.style.filter = getPixelateFilter(card.pixelate);
+      }
       node.style.transform = `translateY(${card.translateY}px)`;
     });
   }, []);
@@ -641,42 +649,44 @@ export default function Home() {
 
   return (
     <>
-      <svg
-        aria-hidden="true"
-        className="pixelate-defs"
-        width="0"
-        height="0"
-        style={{ position: "fixed" }}
-      >
-        <defs>
-          {PIXELATE_LEVELS.map((level, index) => (
-            <filter
-              id={`pixelate-${index + 1}`}
-              key={`pixelate-${index + 1}`}
-              x="-20%"
-              y="-20%"
-              width="140%"
-              height="140%"
-              colorInterpolationFilters="sRGB"
-            >
-              <feFlood
-                x="0"
-                y="0"
-                width={level.cell}
-                height={level.cell}
-              />
-              <feComposite width={level.tile} height={level.tile} />
-              <feTile result="pixelateMask" />
-              <feComposite
-                in="SourceGraphic"
-                in2="pixelateMask"
-                operator="in"
-              />
-              <feMorphology operator="dilate" radius={level.dilate} />
-            </filter>
-          ))}
-        </defs>
-      </svg>
+      {!isMobileRuntime && (
+        <svg
+          aria-hidden="true"
+          className="pixelate-defs"
+          width="0"
+          height="0"
+          style={{ position: "fixed" }}
+        >
+          <defs>
+            {PIXELATE_LEVELS.map((level, index) => (
+              <filter
+                id={`pixelate-${index + 1}`}
+                key={`pixelate-${index + 1}`}
+                x="-20%"
+                y="-20%"
+                width="140%"
+                height="140%"
+                colorInterpolationFilters="sRGB"
+              >
+                <feFlood
+                  x="0"
+                  y="0"
+                  width={level.cell}
+                  height={level.cell}
+                />
+                <feComposite width={level.tile} height={level.tile} />
+                <feTile result="pixelateMask" />
+                <feComposite
+                  in="SourceGraphic"
+                  in2="pixelateMask"
+                  operator="in"
+                />
+                <feMorphology operator="dilate" radius={level.dilate} />
+              </filter>
+            ))}
+          </defs>
+        </svg>
+      )}
 
       <SmoothScroll
         onScroll={handleScroll}
@@ -720,15 +730,15 @@ export default function Home() {
         <div className="fixed-overlay">
           <div
             ref={heroIntroRef}
-            className="hero-intro"
+            className={`hero-intro${isMobileRuntime ? " mobile" : ""}`}
             style={{
               opacity: INITIAL_SCROLL_VISUALS.titleOpacity,
-              filter: getPixelateFilter(INITIAL_SCROLL_VISUALS.titlePixelate),
+              filter: isMobileRuntime ? "none" : getPixelateFilter(INITIAL_SCROLL_VISUALS.titlePixelate),
             }}
           >
             <img
               className="hero-intro-logo"
-              src="/logo/logotype_with_taglinesvg.svg"
+              src={isMobileRuntime ? "/logo/lockup_vertical.svg" : "/logo/logotype_with_taglinesvg.svg"}
               alt="Origin"
             />
           </div>
@@ -737,7 +747,7 @@ export default function Home() {
             ref={aboutCopyRef}
             className="about-copy"
             style={{
-              filter: getPixelateFilter(INITIAL_SCROLL_VISUALS.aboutPixelate),
+              filter: isMobileRuntime ? "none" : getPixelateFilter(INITIAL_SCROLL_VISUALS.aboutPixelate),
               opacity: INITIAL_SCROLL_VISUALS.aboutOpacity,
               transform: `translateY(${INITIAL_SCROLL_VISUALS.aboutTranslateY}px)`,
             }}
@@ -784,7 +794,7 @@ export default function Home() {
                 className="placeholder-card"
                 style={{
                   opacity: INITIAL_SCROLL_VISUALS.placeholderCards[index].opacity,
-                  filter: getPixelateFilter(
+                  filter: isMobileRuntime ? "none" : getPixelateFilter(
                     INITIAL_SCROLL_VISUALS.placeholderCards[index].pixelate
                   ),
                   transform: `translateY(${INITIAL_SCROLL_VISUALS.placeholderCards[index].translateY}px)`,
@@ -1007,6 +1017,11 @@ export default function Home() {
           max-width: min(560px, calc(100% - 96px));
           user-select: none;
           will-change: filter, opacity;
+        }
+
+        .hero-intro.mobile {
+          width: 70vw;
+          max-width: calc(100% - 48px);
         }
 
         .hero-intro-logo {
