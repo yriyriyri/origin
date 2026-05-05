@@ -1129,6 +1129,7 @@ export default function Home() {
           --text-column-width: calc(100vw - 48px);
           --text-column-right: calc(var(--about-left-offset) + var(--text-column-width));
           padding: 20px 24px 36px;
+          height: 100vh;
         }
 
         main[data-mobile-runtime="true"] .placeholder-copy {
