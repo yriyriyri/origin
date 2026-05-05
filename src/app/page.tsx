@@ -840,7 +840,7 @@ export default function Home() {
               )}`,
             } as CSSProperties}
           >
-            {runtimeReady && !isMobileRuntime ? (
+            {runtimeReady ? (
               <GlassOrb
                 className="placeholder-visualizer-orb"
                 contentClassName="placeholder-visualizer-content"
@@ -1162,11 +1162,11 @@ export default function Home() {
         }
 
         main[data-mobile-runtime="true"] .placeholder-visualizer {
-          top: 25vh;
+          top: 4%;
           left: 50%;
           bottom: auto;
-          width: min(58.5vw, 288px);
-          transform: translate(-50%, -50%);
+          width: 80vw;
+          transform: translateX(-50%);
         }
 
         main[data-mobile-runtime="true"] .about-copy {
@@ -1179,7 +1179,7 @@ export default function Home() {
           position: absolute;
           top: 50%;
           left: 50%;
-          width: 80vw;
+          width: 90vw;
           max-width: none;
           transform: translate(-50%, -50%);
         }
