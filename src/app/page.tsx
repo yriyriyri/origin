@@ -1155,7 +1155,7 @@ export default function Home() {
           left: auto;
           width: 100%;
           max-width: none;
-          margin-top: 20px;
+          margin-top: 0;
           padding-top: 0;
           border-top: none;
           transform: none;
