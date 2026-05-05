@@ -1303,21 +1303,24 @@ export default function CymaticVisualizer({
       const projectStartedAt = profilerEnabled ? performance.now() : 0;
 
       if (useBakedMode) {
-        // Mobile: skip sim entirely — write baked positions + energy directly.
-        // Colors still computed realtime in the draw loop below.
+        // Mobile: skip sim entirely — interpolate baked positions + lightweight
+        // damped-velocity jitter to restore organic movement without any trig.
+        // vx/vy are unused by physics on this path so we repurpose them as
+        // jitter accumulators.
+        const JITTER_IMPULSE = 0.0018;
+        const JITTER_DAMPING = 0.88;
         const dA = bakedProjections[bakedBaseIdx];
         const dB = bakedProjections[bakedNextIdx];
         for (let i = 0; i < particles.length; i++) {
           const base = i * 5;
-          if (bakedMix <= 1e-6) {
-            particles[i].x = dA[base];
-            particles[i].y = dA[base + 1];
-            particles[i].energy = dA[base + 4];
-          } else {
-            particles[i].x = lerp(dA[base],     dB[base],     bakedMix);
-            particles[i].y = lerp(dA[base + 1], dB[base + 1], bakedMix);
-            particles[i].energy = lerp(dA[base + 4], dB[base + 4], bakedMix);
-          }
+          const bx = bakedMix <= 1e-6 ? dA[base]     : lerp(dA[base],     dB[base],     bakedMix);
+          const by = bakedMix <= 1e-6 ? dA[base + 1] : lerp(dA[base + 1], dB[base + 1], bakedMix);
+          const p  = particles[i];
+          p.vx = p.vx * JITTER_DAMPING + (Math.random() - 0.5) * JITTER_IMPULSE;
+          p.vy = p.vy * JITTER_DAMPING + (Math.random() - 0.5) * JITTER_IMPULSE;
+          p.x = bx + p.vx;
+          p.y = by + p.vy;
+          p.energy = bakedMix <= 1e-6 ? dA[base + 4] : lerp(dA[base + 4], dB[base + 4], bakedMix);
         }
       } else {
         // Desktop: full physics simulation
