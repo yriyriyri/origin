@@ -96,8 +96,8 @@ export const MOBILE_CANVAS_RUNTIME: CanvasRuntimeProfile = {
     frameIntervalMs: 33,
     glowOverscan: 0.06,
     nodeProjectionSteps: 1,
-    particleMin: 240,
-    particleMax: 1600,
+    particleMin: 60,
+    particleMax: 300,
     powerPreference: "low-power",
     passes: {
       blur: true,
