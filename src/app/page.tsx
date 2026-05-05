@@ -1177,7 +1177,7 @@ export default function Home() {
         main[data-mobile-runtime="true"] .about-copy-group,
         main[data-mobile-runtime="true"] .placeholder-copy-group {
           position: absolute;
-          top: 50%;
+          top: 60%;
           left: 50%;
           width: 90vw;
           max-width: none;
