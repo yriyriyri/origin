@@ -29,8 +29,6 @@ import {
   type CanvasRuntimeProfile,
 } from "@/lib/canvasRuntime";
 import {
-  desaturateRgbPerceptual,
-  getTransitionSaturation,
   mixRgbPerceptual,
 } from "@/lib/colorMix";
 import {
@@ -1230,21 +1228,18 @@ export default function CymaticVisualizer({
             g: clamp(baseGreenRef.current / 255, 0, 1),
             b: clamp(baseBlueRef.current / 255, 0, 1),
           }
-        : desaturateRgbPerceptual(
-            mixRgbPerceptual(
-              {
-                r: homepageVariantBlend!.a.baseRed / 255,
-                g: homepageVariantBlend!.a.baseGreen / 255,
-                b: homepageVariantBlend!.a.baseBlue / 255,
-              },
-              {
-                r: homepageVariantBlend!.b.baseRed / 255,
-                g: homepageVariantBlend!.b.baseGreen / 255,
-                b: homepageVariantBlend!.b.baseBlue / 255,
-              },
-              homepageVariantBlend!.mix
-            ),
-            getTransitionSaturation(homepageVariantBlend!.mix)
+        : mixRgbPerceptual(
+            {
+              r: homepageVariantBlend!.a.baseRed / 255,
+              g: homepageVariantBlend!.a.baseGreen / 255,
+              b: homepageVariantBlend!.a.baseBlue / 255,
+            },
+            {
+              r: homepageVariantBlend!.b.baseRed / 255,
+              g: homepageVariantBlend!.b.baseGreen / 255,
+              b: homepageVariantBlend!.b.baseBlue / 255,
+            },
+            homepageVariantBlend!.mix
           );
       const agentColor = baseAgentColor;
       const pulseLegacyBlend = customMode

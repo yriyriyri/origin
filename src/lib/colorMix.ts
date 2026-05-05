@@ -11,11 +11,6 @@ export type Rgb255 = {
 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-const smoothstep = (edge0: number, edge1: number, value: number) => {
-  const t = clamp01((value - edge0) / Math.max(1e-6, edge1 - edge0));
-  return t * t * (3 - 2 * t);
-};
-
 const srgbToLinear = (value: number) =>
   value <= 0.04045
     ? value / 12.92
@@ -45,35 +40,6 @@ const rgbToOklab = ({ r, g, b }: RgbUnit) => {
     b: 0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot,
   };
 };
-
-const oklabToOklch = ({
-  l,
-  a,
-  b,
-}: {
-  a: number;
-  b: number;
-  l: number;
-}) => {
-  const c = Math.hypot(a, b);
-  const h = c > 1e-6 ? Math.atan2(b, a) : 0;
-
-  return { l, c, h };
-};
-
-const oklchToOklab = ({
-  l,
-  c,
-  h,
-}: {
-  c: number;
-  h: number;
-  l: number;
-}) => ({
-  l,
-  a: Math.cos(h) * c,
-  b: Math.sin(h) * c,
-});
 
 const oklabToRgb = ({
   l,
@@ -115,25 +81,6 @@ export const mixRgbPerceptual = (from: RgbUnit, to: RgbUnit, mix: number): RgbUn
     a: fromLab.a + (toLab.a - fromLab.a) * t,
     b: fromLab.b + (toLab.b - fromLab.b) * t,
   });
-};
-
-export const getTransitionSaturation = (mix: number) => {
-  const edgeDistance = Math.abs(clamp01(mix) - 0.5) * 2;
-  return smoothstep(0.0, 1.0, edgeDistance);
-};
-
-export const desaturateRgbPerceptual = (
-  color: RgbUnit,
-  saturation: number
-): RgbUnit => {
-  const lch = oklabToOklch(rgbToOklab(color));
-  return oklabToRgb(
-    oklchToOklab({
-      l: lch.l,
-      c: lch.c * clamp01(saturation),
-      h: lch.h,
-    })
-  );
 };
 
 export const rgb255ToUnit = ({ r, g, b }: Rgb255): RgbUnit => ({

@@ -37,46 +37,7 @@ body {
   min-height: 100%;
   color: var(--foreground);
   background: var(--background);
-  background-image:
-    var(--background-noise-fine),
-    var(--background-noise-coarse),
-    repeating-linear-gradient(
-      0deg,
-      rgba(255, 255, 255, 0.016) 0 1px,
-      rgba(0, 0, 0, 0.016) 1px 2px
-    ),
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.012) 0 1px,
-      rgba(0, 0, 0, 0.012) 1px 2px
-    ),
-    repeating-linear-gradient(
-      45deg,
-      rgba(255, 255, 255, 0.008) 0 1px,
-      rgba(0, 0, 0, 0.008) 1px 3px
-    ),
-    repeating-linear-gradient(
-      -45deg,
-      rgba(255, 255, 255, 0.006) 0 1px,
-      rgba(0, 0, 0, 0.006) 1px 3px
-    ),
-    radial-gradient(
-      ellipse at 50% 18%,
-      #102022 0%,
-      #071114 42%,
-      #020508 100%
-    );
-  background-size: 64px 64px, 112px 112px, 2px 2px, 2px 2px, 3px 3px, 3px 3px, auto;
-  background-repeat: repeat, repeat, repeat, repeat, repeat, repeat, no-repeat;
-  background-attachment: fixed;
-  background-blend-mode:
-    overlay,
-    soft-light,
-    soft-light,
-    soft-light,
-    overlay,
-    overlay,
-    normal;
+  background-image: none;
   font-family: var(--font-space-grotesk), sans-serif;
   font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
@@ -85,12 +46,7 @@ body {
 
 body::before,
 body::after {
-  content: "";
-  position: fixed;
-  inset: -18vh -18vw;
-  pointer-events: none;
-  z-index: -1;
-  will-change: transform, opacity;
+  display: none;
 }
 
 body::before {

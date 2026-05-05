@@ -9,8 +9,6 @@ import GlassOrb from "@/components/GlassOrb";
 import SmoothScroll from "@/components/SmoothScroll";
 import { useCanvasRuntimeProfile } from "@/hooks/useCanvasRuntimeProfile";
 import {
-  desaturateRgbPerceptual,
-  getTransitionSaturation,
   mixRgbPerceptual,
   rgbUnitTo255,
   type Rgb255,
@@ -34,6 +32,12 @@ type PlaceholderCardVisual = {
   translateY: number;
 };
 
+type PixelateLevel = {
+  cell: number;
+  dilate: number;
+  tile: number;
+};
+
 type ScrollVisualSnapshot = {
   aboutOpacity: number;
   aboutPixelate: number;
@@ -41,6 +45,7 @@ type ScrollVisualSnapshot = {
   boidsOverlayOpacity: number;
   disperseAmount: number;
   hintOpacity: number;
+  orbGradientOpacity: number;
   placeholderCards: PlaceholderCardVisual[];
   scrollProgress: number;
   titleOpacity: number;
@@ -55,7 +60,15 @@ const ease = (value: number) => {
   const t = clamp01(value);
   return t * t * (3 - 2 * t);
 };
-const TEXT_BLUR_MAX_PX = 14;
+const PIXELATE_LEVELS: readonly PixelateLevel[] = [
+  { cell: 1.0, dilate: 0.2, tile: 2.6 },
+  { cell: 1.5, dilate: 0.6, tile: 4.3 },
+  { cell: 1.75, dilate: 0.8, tile: 5.15 },
+  { cell: 2.0, dilate: 1.0, tile: 6.0 },
+  { cell: 2.25, dilate: 1.2, tile: 6.85 },
+] as const;
+const PIXELATE_OPACITY_DROP = 0.24;
+const PIXELATE_OPACITY_RAMP = 0.14;
 const BOIDS_SCALE = 1.5;
 const HERO_ABOUT_IN_END = 0.58;
 const HERO_TITLE_RETURN_END = 0.26;
@@ -82,7 +95,7 @@ const HERO_EXIT_START_SCROLL =
   HERO_ABOUT_FOCUS_EXTENSION;
 const HOMEPAGE_CYMATIC_SHARED_PRESET: CymaticSharedPreset = {
   sourceSettings: {
-    hueShift: 0,
+    hueShift: 0.08,
     nodePull: 1,
     particleDensity: 2.42,
     particleSize: 1.92,
@@ -90,7 +103,7 @@ const HOMEPAGE_CYMATIC_SHARED_PRESET: CymaticSharedPreset = {
   fxSettings: {
     presetId: "cymatics",
     blur: {
-      enabled: true,
+      enabled: false,
       uniforms: {
         blurAmount: 0.5,
       },
@@ -98,7 +111,7 @@ const HOMEPAGE_CYMATIC_SHARED_PRESET: CymaticSharedPreset = {
     ascii: {
       enabled: true,
       uniforms: {
-        pixelation: 0.5,
+        pixelation: 0.35,
         saturation: 1.7,
       },
     },
@@ -112,17 +125,17 @@ const HOMEPAGE_CYMATIC_SHARED_PRESET: CymaticSharedPreset = {
       enabled: true,
       uniforms: {
         glowStrength: 2.15,
-        glowRadius: 5.0,
+        glowRadius: 3.5,
         radialStrength: 2.4,
         radialFalloff: 1.45,
       },
     },
     vignette: {
-      enabled: false,
+      enabled: true,
       uniforms: {
-        strength: 1.3,
-        power: 0.8,
-        zoom: 1.3,
+        strength: 0.78,
+        power: 0.58,
+        zoom: 1,
       },
     },
   },
@@ -209,22 +222,34 @@ const getAgentDisplayValue = (timeline: number, total: number) => {
   );
 };
 
-const getTextBlurFilter = (progress: number) => {
+const getPixelateFilter = (progress: number) => {
   const active = clamp01(progress);
   if (active <= 0.001) {
     return "none";
   }
 
-  return `blur(${(ease(active) * TEXT_BLUR_MAX_PX).toFixed(2)}px)`;
+  const level = Math.min(
+    PIXELATE_LEVELS.length,
+    Math.max(1, Math.ceil(active * PIXELATE_LEVELS.length))
+  );
+
+  return `url(#pixelate-${level})`;
+};
+
+const getPixelateOpacity = (progress: number) => {
+  const active = clamp01(progress);
+  if (active <= 0.001) {
+    return 1;
+  }
+
+  const ramp = ease(Math.min(1, active / PIXELATE_OPACITY_RAMP));
+  return 1 - PIXELATE_OPACITY_DROP * ramp;
 };
 
 const getVisualizerShellOpacity = (visibility: number) => {
-  const active = clamp01(visibility);
-  if (active <= 0.001) {
-    return 0;
-  }
-
-  return ease(active);
+  // visibility already has ease() applied; just scale to 0.9 max
+  if (visibility <= 0.001) return 0;
+  return visibility * 0.9;
 };
 
 const getDefaultOrbTint = (index: number): Rgb255 =>
@@ -257,21 +282,18 @@ const getOrbTint = (
     : getDefaultOrbTint(nextIndex);
 
   return rgbUnitTo255(
-    desaturateRgbPerceptual(
-      mixRgbPerceptual(
-        {
-          r: from.r / 255,
-          g: from.g / 255,
-          b: from.b / 255,
-        },
-        {
-          r: to.r / 255,
-          g: to.g / 255,
-          b: to.b / 255,
-        },
-        mix
-      ),
-      getTransitionSaturation(mix)
+    mixRgbPerceptual(
+      {
+        r: from.r / 255,
+        g: from.g / 255,
+        b: from.b / 255,
+      },
+      {
+        r: to.r / 255,
+        g: to.g / 255,
+        b: to.b / 255,
+      },
+      mix
     )
   );
 };
@@ -299,12 +321,14 @@ const getScrollVisualSnapshot = (
   const aboutIn = aboutProgress;
   const aboutOut = 1 - aboutFadeProgress;
   const aboutPixelate = Math.max(1 - aboutIn, aboutFadeProgress);
-  const aboutOpacity = Math.min(aboutIn, aboutOut);
+  const aboutOpacity =
+    Math.min(aboutIn, aboutOut) * getPixelateOpacity(aboutPixelate);
   const aboutTranslateY =
     aboutIn < 1 ? 24 * (1 - aboutIn) : -14 * aboutFadeProgress;
 
   const titlePixelate = titleProgress;
-  const titleOpacity = 1 - titleProgress;
+  const titleOpacity =
+    (1 - titleProgress) * getPixelateOpacity(titlePixelate);
 
   const hintOpacity = Math.max(0, 1 - aboutProgress * 3);
   const placeholderTotalSpan =
@@ -326,14 +350,22 @@ const getScrollVisualSnapshot = (
     const pixelate = 1 - visibility;
 
     return {
-      opacity: Math.pow(visibility, 1.15),
+      opacity: Math.pow(visibility, 1.15) * getPixelateOpacity(pixelate),
       pixelate,
       translateY:
         phase < 0 ? 28 * (1 - visibility) : -18 * (1 - visibility),
     };
   });
 
-  const visualizerOpacity = PLACEHOLDER_PAIRS.reduce((maxVisibility, _, index) => {
+  // Section entry: ramps 0→1 as first agent enters, then stays 1.
+  // Drives whole-shell opacity so the cymatics never dips during agent transitions.
+  const visualizerOpacity = ease(
+    clamp01((placeholderTimeline + PLACEHOLDER_FADE_IN) / PLACEHOLDER_FADE_IN)
+  );
+
+  // Per-agent max visibility: dips slightly during crossovers between agents.
+  // Raised to a low power so dips are gentle — drives only the orb glass layers.
+  const rawGradientOpacity = PLACEHOLDER_PAIRS.reduce((maxVisibility, _, index) => {
     const phase = placeholderTimeline - index * PLACEHOLDER_STEP;
     const visibility = getAgentCardVisibility(
       phase,
@@ -341,6 +373,7 @@ const getScrollVisualSnapshot = (
     );
     return Math.max(maxVisibility, visibility);
   }, 0);
+  const orbGradientOpacity = Math.pow(clamp01(rawGradientOpacity), 0.35);
 
   return {
     aboutOpacity,
@@ -349,6 +382,7 @@ const getScrollVisualSnapshot = (
     boidsOverlayOpacity,
     disperseAmount,
     hintOpacity,
+    orbGradientOpacity,
     placeholderCards,
     scrollProgress: clamp01(scroll / maxScroll),
     titleOpacity,
@@ -364,19 +398,19 @@ const getScrollVisualSnapshot = (
 const PLACEHOLDER_PAIRS = [
   {
     title: "innate",
-    body: "innate is the core intelligence engine. the foundation layer that learns the shape of your organization and compounds with every decision it touches.",
+    body: "Innate is the core intelligence engine. The foundation layer that learns the shape of your organization and compounds with every decision it touches.",
   },
   {
     title: "atlas",
-    body: "content ontology platform. maps the entire landscape of audio content into navigable, queryable intelligence.",
+    body: "Content ontology platform. Maps the entire landscape of audio content into navigable, queryable intelligence.",
   },
   {
     title: "pulse",
-    body: "social listening and sentiment. surfaces what matters from the noise — real-time cultural pulse for entertainment organizations.",
+    body: "Social listening and sentiment. Surfaces what matters from the noise — real-time cultural pulse for entertainment organizations.",
   },
   {
     title: "daisy",
-    body: "artist development ai. identifies, tracks, and models the trajectory of emerging talent before the market catches on.",
+    body: "Artist development AI. Identifies, tracks, and models the trajectory of emerging talent before the market catches on.",
   },
 ] as const;
 
@@ -428,12 +462,12 @@ export default function Home() {
 
     if (heroIntroRef.current) {
       heroIntroRef.current.style.opacity = `${visuals.titleOpacity}`;
-      heroIntroRef.current.style.filter = getTextBlurFilter(visuals.titlePixelate);
+      heroIntroRef.current.style.filter = getPixelateFilter(visuals.titlePixelate);
     }
 
     if (aboutCopyRef.current) {
       aboutCopyRef.current.style.opacity = `${visuals.aboutOpacity}`;
-      aboutCopyRef.current.style.filter = getTextBlurFilter(
+      aboutCopyRef.current.style.filter = getPixelateFilter(
         visuals.aboutPixelate
       );
       aboutCopyRef.current.style.transform = `translateY(${visuals.aboutTranslateY}px)`;
@@ -447,6 +481,10 @@ export default function Home() {
       placeholderVisualizerShellRef.current.style.opacity = `${getVisualizerShellOpacity(
         visuals.visualizerOpacity
       )}`;
+      placeholderVisualizerShellRef.current.style.setProperty(
+        "--orb-glass-opacity",
+        `${visuals.orbGradientOpacity.toFixed(3)}`
+      );
       const orbTint = getOrbTint(
         visuals.visualizerValue,
         HOMEPAGE_CYMATIC_AGENT_VARIANTS
@@ -472,7 +510,7 @@ export default function Home() {
       }
 
       node.style.opacity = `${card.opacity}`;
-      node.style.filter = getTextBlurFilter(card.pixelate);
+      node.style.filter = getPixelateFilter(card.pixelate);
       node.style.transform = `translateY(${card.translateY}px)`;
     });
   }, []);
@@ -603,6 +641,43 @@ export default function Home() {
 
   return (
     <>
+      <svg
+        aria-hidden="true"
+        className="pixelate-defs"
+        width="0"
+        height="0"
+        style={{ position: "fixed" }}
+      >
+        <defs>
+          {PIXELATE_LEVELS.map((level, index) => (
+            <filter
+              id={`pixelate-${index + 1}`}
+              key={`pixelate-${index + 1}`}
+              x="-20%"
+              y="-20%"
+              width="140%"
+              height="140%"
+              colorInterpolationFilters="sRGB"
+            >
+              <feFlood
+                x="0"
+                y="0"
+                width={level.cell}
+                height={level.cell}
+              />
+              <feComposite width={level.tile} height={level.tile} />
+              <feTile result="pixelateMask" />
+              <feComposite
+                in="SourceGraphic"
+                in2="pixelateMask"
+                operator="in"
+              />
+              <feMorphology operator="dilate" radius={level.dilate} />
+            </filter>
+          ))}
+        </defs>
+      </svg>
+
       <SmoothScroll
         onScroll={handleScroll}
       />
@@ -648,30 +723,35 @@ export default function Home() {
             className="hero-intro"
             style={{
               opacity: INITIAL_SCROLL_VISUALS.titleOpacity,
-              filter: getTextBlurFilter(INITIAL_SCROLL_VISUALS.titlePixelate),
+              filter: getPixelateFilter(INITIAL_SCROLL_VISUALS.titlePixelate),
             }}
           >
-            <span className="hero-intro-word">origin</span>
-            <span className="hero-intro-copy">| intelligence infrastructure</span>
+            <img
+              className="hero-intro-logo"
+              src="/logo/logotype_with_taglinesvg.svg"
+              alt="Origin"
+            />
           </div>
 
           <div
             ref={aboutCopyRef}
             className="about-copy"
             style={{
-              filter: getTextBlurFilter(INITIAL_SCROLL_VISUALS.aboutPixelate),
+              filter: getPixelateFilter(INITIAL_SCROLL_VISUALS.aboutPixelate),
               opacity: INITIAL_SCROLL_VISUALS.aboutOpacity,
               transform: `translateY(${INITIAL_SCROLL_VISUALS.aboutTranslateY}px)`,
             }}
           >
-            <div className="about-kicker about-left">about</div>
+            <div className="about-copy-group">
+              <div className="about-kicker">who we are</div>
 
-            <div className="about-body">
-              <p>
-                origin partners with labels, live entertainment companies, and
-                catalog managers to build intelligence systems that form the
-                instincts behind every decision.
-              </p>
+              <div className="about-body">
+                <p>
+                  Origin partners with labels, live entertainment companies, and
+                  catalog managers to build intelligence systems that form the
+                  instincts behind every decision.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -704,17 +784,19 @@ export default function Home() {
                 className="placeholder-card"
                 style={{
                   opacity: INITIAL_SCROLL_VISUALS.placeholderCards[index].opacity,
-                  filter: getTextBlurFilter(
+                  filter: getPixelateFilter(
                     INITIAL_SCROLL_VISUALS.placeholderCards[index].pixelate
                   ),
                   transform: `translateY(${INITIAL_SCROLL_VISUALS.placeholderCards[index].translateY}px)`,
                 }}
               >
-                <h2 className="placeholder-title">{pair.title}</h2>
-                <div className="placeholder-body">
-                  {pair.body.split("\n").map((line) => (
-                    <p key={`${pair.title}-${line}`}>{line}</p>
-                  ))}
+                <div className="placeholder-copy-group">
+                  <h2 className="placeholder-title">{pair.title}</h2>
+                  <div className="placeholder-body">
+                    {pair.body.split("\n").map((line) => (
+                      <p key={`${pair.title}-${line}`}>{line}</p>
+                    ))}
+                  </div>
                 </div>
               </article>
             ))}
@@ -727,6 +809,7 @@ export default function Home() {
               opacity: getVisualizerShellOpacity(
                 INITIAL_SCROLL_VISUALS.visualizerOpacity
               ),
+              "--orb-glass-opacity": `${INITIAL_SCROLL_VISUALS.orbGradientOpacity.toFixed(3)}`,
               "--orb-tint-r": `${Math.round(
                 getOrbTint(
                   INITIAL_SCROLL_VISUALS.visualizerValue,
@@ -747,26 +830,29 @@ export default function Home() {
               )}`,
             } as CSSProperties}
           >
-            <GlassOrb
-              className="placeholder-visualizer-orb"
-              contentClassName="placeholder-visualizer-inner"
-              tint={getOrbTint(
-                INITIAL_SCROLL_VISUALS.visualizerValue,
-                HOMEPAGE_CYMATIC_AGENT_VARIANTS
-              )}
-            >
-              {runtimeReady && !isMobileRuntime ? (
-                <CymaticVisualizer
-                  agentVariants={HOMEPAGE_CYMATIC_AGENT_VARIANTS}
-                  sharedPreset={HOMEPAGE_CYMATIC_SHARED_PRESET}
-                  value={INITIAL_SCROLL_VISUALS.visualizerValue}
-                  opacity={1}
-                  opacityRefExternal={visualizerOpacityRef}
-                  runtimeProfile={canvasRuntimeProfile!}
-                  valueRefExternal={visualizerValueRef}
-                />
-              ) : null}
-            </GlassOrb>
+            {runtimeReady && !isMobileRuntime ? (
+              <GlassOrb
+                className="placeholder-visualizer-orb"
+                contentClassName="placeholder-visualizer-content"
+                contentInset="10%"
+                tint={getOrbTint(
+                  INITIAL_SCROLL_VISUALS.visualizerValue,
+                  HOMEPAGE_CYMATIC_AGENT_VARIANTS
+                )}
+              >
+                <div className="placeholder-visualizer-plain">
+                  <CymaticVisualizer
+                    agentVariants={HOMEPAGE_CYMATIC_AGENT_VARIANTS}
+                    sharedPreset={HOMEPAGE_CYMATIC_SHARED_PRESET}
+                    value={INITIAL_SCROLL_VISUALS.visualizerValue}
+                    opacity={1}
+                    opacityRefExternal={visualizerOpacityRef}
+                    runtimeProfile={canvasRuntimeProfile!}
+                    valueRefExternal={visualizerValueRef}
+                  />
+                </div>
+              </GlassOrb>
+            ) : null}
           </div>
         </div>
 
@@ -879,32 +965,32 @@ export default function Home() {
               (var(--overlay-content-width) - var(--text-column-right)) / 2
           );
           transform: translate(-50%, -50%);
-          width: min(520px, calc(var(--visualizer-area-width) + 64px), 46vw);
+          width: min(390px, calc((var(--visualizer-area-width) + 64px) * 0.75), 34.5vw);
           display: flex;
           justify-content: center;
           align-items: center;
         }
 
+        .placeholder-visualizer-plain {
+          width: 100%;
+          height: 100%;
+        }
+
         .placeholder-visualizer-orb {
           width: 100%;
+          height: auto;
         }
 
-        .placeholder-visualizer-inner :global(.root) {
+        .placeholder-visualizer-content {
+          inset: 0;
+        }
+
+        .placeholder-visualizer-plain :global(.root) {
           width: 100%;
           height: 100%;
         }
 
-        .placeholder-visualizer-inner {
-          width: 100%;
-          height: 100%;
-        }
-
-        .placeholder-visualizer-inner :global(.root) {
-          width: 100%;
-          height: 100%;
-        }
-
-        .placeholder-visualizer-inner :global(.square) {
+        .placeholder-visualizer-plain :global(.square) {
           width: 100%;
           height: 100%;
         }
@@ -914,29 +1000,19 @@ export default function Home() {
           top: 50%;
           left: 50%;
           transform: translate(-50%, -50%);
-          display: inline-flex;
-          align-items: baseline;
+          display: flex;
+          align-items: center;
           justify-content: center;
-          gap: clamp(36px, 4.2vw, 72px);
-          width: max-content;
-          max-width: calc(100% - 96px);
-          font-family: var(--font-space-grotesk);
-          font-size: clamp(21px, 2.5vw, 33px);
-          font-weight: 500;
-          line-height: 1.2;
-          letter-spacing: 0.08em;
+          width: 30vw;
+          max-width: min(560px, calc(100% - 96px));
           user-select: none;
-          color: #ffffff;
-          text-align: center;
-          text-transform: lowercase;
-          text-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
           will-change: filter, opacity;
         }
 
-        .hero-intro-word,
-        .hero-intro-copy {
-          display: inline-block;
-          white-space: nowrap;
+        .hero-intro-logo {
+          display: block;
+          width: 100%;
+          height: auto;
         }
 
         .about-copy {
@@ -945,48 +1021,46 @@ export default function Home() {
           will-change: filter, opacity, transform;
         }
 
-        .about-left {
-          position: absolute;
-          top: var(--section-header-top-offset);
-          left: var(--about-left-offset);
-        }
-
-        .about-body {
+        .about-copy-group,
+        .placeholder-copy-group {
           position: absolute;
           top: 50%;
           left: var(--about-left-offset);
           width: min(770px, calc(100vw - 124px));
           max-width: 770px;
+          display: flex;
+          flex-direction: column;
+          gap: 30px;
           transform: translateY(-50%);
+        }
+
+        .about-body,
+        .placeholder-body {
+          width: 100%;
         }
 
         .about-kicker,
         .placeholder-title {
-          font-family: var(--font-space-grotesk);
-          font-size: clamp(18px, 2.55vw, 31px);
+          font-family: "Garamond", "Adobe Garamond Pro",
+            "Cormorant Garamond", "Baskerville", "Times New Roman", serif;
+          font-size: 52px;
           font-weight: 300;
           line-height: 1.1;
           letter-spacing: 0.03em;
           text-transform: lowercase;
-          color: #ffffff;
+          color: rgba(255, 255, 255, 0.9);
           text-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
-        }
-
-        .about-kicker {
-          margin-bottom: 28px;
+          margin: 0;
         }
 
         .placeholder-title {
-          position: absolute;
-          top: var(--section-header-top-offset);
-          left: var(--about-left-offset);
-          margin: 0;
+          position: static;
         }
 
         .about-body p,
         .placeholder-body p {
           font-family: var(--font-space-grotesk);
-          font-size: clamp(18px, 2.55vw, 31px);
+          font-size: 20px;
           font-weight: 300;
           line-height: 1.75;
           color: rgba(255, 255, 255, 0.9);
@@ -1078,42 +1152,26 @@ export default function Home() {
           top: 25vh;
           left: 50%;
           bottom: auto;
-          width: min(78vw, 384px);
+          width: min(58.5vw, 288px);
           transform: translate(-50%, -50%);
         }
 
         main[data-mobile-runtime="true"] .about-copy {
           inset: auto 24px 36px;
           height: 46vh;
-          display: flex;
-          flex-direction: column;
-          justify-content: flex-end;
         }
 
-        main[data-mobile-runtime="true"] .about-left {
-          position: static;
-          margin: 0;
+        main[data-mobile-runtime="true"] .about-copy-group,
+        main[data-mobile-runtime="true"] .placeholder-copy-group {
+          position: absolute;
+          top: 50%;
+          left: 0;
+          width: 100%;
+          max-width: none;
         }
 
         main[data-mobile-runtime="true"] .about-body {
-          position: static;
-          top: auto;
-          left: auto;
           width: 100%;
-          max-width: none;
-          margin-top: 18px;
-          padding-top: 18px;
-          border-top: 1px solid rgba(255, 255, 255, 0.18);
-          transform: none;
-        }
-
-        .placeholder-body {
-          position: absolute;
-          top: 50%;
-          left: var(--about-left-offset);
-          width: var(--text-column-width);
-          max-width: var(--text-column-width);
-          transform: translateY(-50%);
         }
 
         .placeholder-body p:last-child {
