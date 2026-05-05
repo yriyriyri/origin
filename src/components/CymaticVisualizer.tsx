@@ -1105,6 +1105,39 @@ export default function CymaticVisualizer({
       };
     }
 
+    // Baked projection tables for mobile: 5 floats per particle per mode
+    // [projX, projY, gradientX, gradientY, sourceEnergy]
+    // Computed once at resize time; replaces per-frame projectTowardBlendedModes calls.
+    const bakedProjections: Float32Array[] = [];
+
+    const bakeProjections = () => {
+      bakedProjections.length = 0;
+      const particles = particlesRef.current;
+      const variantCount = Math.max(MODES.length, agentVariants?.length ?? 0);
+
+      for (let modeIdx = 0; modeIdx < variantCount; modeIdx++) {
+        const variant = agentVariants?.[modeIdx] ?? getDefaultHomepageVariant(modeIdx);
+        const mode: ModePair = { n: variant.harmonicN, m: variant.harmonicM };
+        const data = new Float32Array(particles.length * 5);
+
+        for (let pi = 0; pi < particles.length; pi++) {
+          const proj = projectTowardNodeForMode(
+            particles[pi].homeX,
+            particles[pi].homeY,
+            mode,
+            cymaticsRuntime.nodeProjectionSteps
+          );
+          const base = pi * 5;
+          data[base]     = proj.x;
+          data[base + 1] = proj.y;
+          data[base + 2] = proj.gradientX;
+          data[base + 3] = proj.gradientY;
+          data[base + 4] = proj.sourceEnergy;
+        }
+        bakedProjections.push(data);
+      }
+    };
+
     const resize = () => {
       const viewWidth = Math.max(1, square.clientWidth);
       const viewHeight = Math.max(1, square.clientHeight);
@@ -1150,6 +1183,11 @@ export default function CymaticVisualizer({
         cymaticsRuntime.particleMax
       );
       particlesRef.current = Array.from({ length: particleCount }, randomParticle);
+
+      // Pre-bake projection tables whenever particle array changes (mobile only)
+      if (runtimeProfile.isMobile && !studioSettings) {
+        bakeProjections();
+      }
     };
 
     resize();
@@ -1245,6 +1283,20 @@ export default function CymaticVisualizer({
       const pulseLegacyBlend = customMode
         ? 0
         : getPulseLegacyBlend(simValueRef.current);
+
+      // Mobile baked-projection lookup indices
+      const useBakedMode = runtimeProfile.isMobile && !customMode && bakedProjections.length > 0;
+      let bakedBaseIdx = 0;
+      let bakedNextIdx = 0;
+      let bakedMix = 0;
+      if (useBakedMode) {
+        const vc = bakedProjections.length;
+        const clamped = clamp(simValueRef.current, 1, vc);
+        bakedBaseIdx = Math.min(vc - 1, Math.max(0, Math.floor(clamped) - 1));
+        bakedNextIdx = Math.min(vc - 1, bakedBaseIdx + 1);
+        bakedMix = bakedNextIdx === bakedBaseIdx ? 0 : clamped - (bakedBaseIdx + 1);
+      }
+
       const profilerEnabled = isRuntimeProfilerEnabled();
       const frameStartedAt = profilerEnabled ? performance.now() : 0;
       const simStartedAt = profilerEnabled ? performance.now() : 0;
@@ -1252,19 +1304,44 @@ export default function CymaticVisualizer({
 
       for (let i = 0; i < particles.length; i++) {
         const particle = particles[i];
-        const projection = customMode
-          ? projectTowardNodeForMode(
-              particle.homeX,
-              particle.homeY,
-              customMode,
-              cymaticsRuntime.nodeProjectionSteps
-            )
-          : projectTowardBlendedModes(
-              particle.homeX,
-              particle.homeY,
-              blendedModes!,
-              cymaticsRuntime.nodeProjectionSteps
-            );
+        let projection: { x: number; y: number; gradientX: number; gradientY: number; sourceEnergy: number };
+        if (useBakedMode) {
+          // Zero trig: lerp between two pre-baked Float32Arrays
+          const base = i * 5;
+          const dA = bakedProjections[bakedBaseIdx];
+          const dB = bakedProjections[bakedNextIdx];
+          if (bakedMix <= 1e-6) {
+            projection = {
+              x: dA[base],
+              y: dA[base + 1],
+              gradientX: dA[base + 2],
+              gradientY: dA[base + 3],
+              sourceEnergy: dA[base + 4],
+            };
+          } else {
+            projection = {
+              x: lerp(dA[base], dB[base], bakedMix),
+              y: lerp(dA[base + 1], dB[base + 1], bakedMix),
+              gradientX: lerp(dA[base + 2], dB[base + 2], bakedMix),
+              gradientY: lerp(dA[base + 3], dB[base + 3], bakedMix),
+              sourceEnergy: lerp(dA[base + 4], dB[base + 4], bakedMix),
+            };
+          }
+        } else if (customMode) {
+          projection = projectTowardNodeForMode(
+            particle.homeX,
+            particle.homeY,
+            customMode,
+            cymaticsRuntime.nodeProjectionSteps
+          );
+        } else {
+          projection = projectTowardBlendedModes(
+            particle.homeX,
+            particle.homeY,
+            blendedModes!,
+            cymaticsRuntime.nodeProjectionSteps
+          );
+        }
         const desiredX = lerp(particle.homeX, projection.x, nodePullRef.current);
         const desiredY = lerp(particle.homeY, projection.y, nodePullRef.current);
         const gradientMag = Math.hypot(projection.gradientX, projection.gradientY) || 1e-6;
@@ -1317,13 +1394,11 @@ export default function CymaticVisualizer({
           particle.vy *= -0.35;
         }
 
-        particle.energy = customMode
-          ? fieldEnergyForMode(particle.x, particle.y, customMode)
-          : fieldEnergyForBlendedModes(
-              particle.x,
-              particle.y,
-              blendedModes!
-            );
+        particle.energy = useBakedMode
+          ? projection.sourceEnergy
+          : customMode
+            ? fieldEnergyForMode(particle.x, particle.y, customMode)
+            : fieldEnergyForBlendedModes(particle.x, particle.y, blendedModes!);
       }
 
       if (profilerEnabled) {
